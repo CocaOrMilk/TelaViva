@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a1220">
+  <meta name="description" content="Tela Viva — compartilhe sua tela ao vivo em uma sala privada com login.">
+  <title>Tela Viva — Compartilhamento de tela</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="background-grid" aria-hidden="true"></div>
+  <div class="site-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Tela Viva, página inicial">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="25" height="25" fill="none"><rect x="4" y="6" width="24" height="18" rx="4" stroke="currentColor" stroke-width="2.5"/><path d="m12 12 5 4-5 4v-8Z" fill="currentColor"/><path d="M12 28h8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        </span>
+        <span>Tela<span class="brand-accent">Viva</span></span>
+      </a>
+      <div id="topPublic" class="top-right"><span class="online-dot"></span> Conexão privada</div>
+      <div id="topPrivate" class="top-right hidden">
+        <span id="accountBadge" class="account-badge"></span>
+        <button id="logoutBtn" class="text-button" type="button">Sair <span aria-hidden="true">↗</span></button>
+      </div>
+    </header>
+
+    <main>
+      <section id="authView" class="auth-layout">
+        <div class="auth-intro">
+          <div class="eyebrow"><span class="spark"></span> CONECTE. MOSTRE. COLABORE.</div>
+          <h1>Sua tela.<br><span class="gradient-text">Sem distâncias.</span></h1>
+          <p>Compartilhe uma apresentação, mostre um projeto ou ajude alguém — tudo pelo navegador, sem instalar programas adicionais.</p>
+          <div class="auth-illustration" aria-hidden="true">
+            <div class="floating-chip chip-one"><span class="chip-icon">↗</span> Compartilhando ao vivo</div>
+            <div class="preview-window">
+              <div class="preview-top"><i></i><i></i><i></i><span>visualização-da-tela</span></div>
+              <div class="preview-body"><div class="preview-sidebar"><b></b><b></b><b></b></div><div class="preview-content"><div class="preview-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="preview-line"></div><div class="preview-line short"></div></div></div>
+            </div>
+            <div class="floating-chip chip-two"><span class="avatar-cluster"><b>A</b><b>B</b></span> Conectados com segurança</div>
+          </div>
+          <div class="intro-features"><span><span class="feature-check">✓</span> Sem instalação</span><span><span class="feature-check">✓</span> Compartilhamento com permissão</span></div>
+        </div>
+        <div class="auth-card-wrap">
+          <div class="auth-card">
+            <div class="card-icon">✳</div>
+            <div class="eyebrow muted">BEM-VINDO DE VOLTA</div>
+            <h2>Entre na sua conta</h2>
+            <p class="subtle">Use suas credenciais para acessar suas salas de compartilhamento.</p>
+            <form id="loginForm" class="login-form">
+              <label for="email">E-mail</label>
+              <input id="email" name="email" type="email" autocomplete="username" placeholder="voce@exemplo.com" maxlength="180" required>
+              <label for="password">Senha</label>
+              <div class="password-wrap"><input id="password" name="password" type="password" autocomplete="current-password" placeholder="Digite sua senha" required><button type="button" id="togglePassword" class="password-toggle" aria-label="Mostrar senha">Mostrar</button></div>
+              <p id="loginError" class="form-error hidden" role="alert"></p>
+              <button id="loginSubmit" class="primary-button full" type="submit">Entrar na plataforma <span aria-hidden="true">→</span></button>
+            </form>
+            <div class="auth-footnote"><span class="lock-small">♧</span> Seus dados de acesso ficam protegidos no servidor.</div>
+          </div>
+          <p class="helper-below">Precisa de acesso? Solicite ao administrador uma conta.</p>
+        </div>
+      </section>
+
+      <section id="dashboardView" class="dashboard hidden">
+        <div class="dashboard-heading">
+          <div><div class="eyebrow">SEU ESPAÇO DE TRABALHO</div><h1>Compartilhe sem complicar<span class="period">.</span></h1><p>Crie uma sala ou entre com o código de um convite.</p></div>
+          <div class="secure-badge"><span class="online-dot"></span> Pronto para conectar</div>
+        </div>
+        <div class="action-grid">
+          <div class="action-card create-card">
+            <div class="action-icon coral"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M12 8v5M9.5 10.5h5"/></svg></div>
+            <div class="action-card-title">Criar nova sala</div>
+            <p>Inicie um espaço privado e convide outras pessoas para acompanhar sua tela.</p>
+            <button id="createRoomBtn" class="primary-button" type="button">Criar sala <span aria-hidden="true">↗</span></button>
+            <div class="card-decoration" aria-hidden="true">01</div>
+          </div>
+          <div class="action-card join-card">
+            <div class="action-icon purple"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 12h12M16 7l5 5-5 5"/><path d="M13 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8"/></svg></div>
+            <div class="action-card-title">Entrar em uma sala</div>
+            <p>Recebeu um convite? Insira o código da sala para assistir ao compartilhamento.</p>
+            <form id="joinRoomForm" class="join-form"><label class="sr-only" for="roomCodeInput">Código da sala</label><input id="roomCodeInput" placeholder="XXXX-XXXX-XXXX" maxlength="14" spellcheck="false" autocomplete="off"><button class="secondary-button" type="submit">Entrar <span aria-hidden="true">→</span></button></form>
+            <div class="card-decoration" aria-hidden="true">02</div>
+          </div>
+        </div>
+        <div class="info-panel"><span class="info-icon">i</span><div><strong>Como funciona?</strong><p>Quem compartilha escolhe a tela ou janela. Todos que entram na sala precisam fazer login e ter o código do convite.</p></div></div>
+      </section>
+
+      <section id="roomView" class="room-layout hidden">
+        <div class="room-topline"><button id="leaveRoomBtn" class="back-button" type="button"><span aria-hidden="true">←</span> Voltar ao início</button><span class="eyebrow">SALA DE COMPARTILHAMENTO</span></div>
+        <div class="room-heading"><div><h1>Sala <span id="roomTitle" class="gradient-text">—</span></h1><p id="roomStatus">Aguardando compartilhamento de tela</p></div><div class="status-pill" id="livePill"><span class="status-dot"></span><span id="liveLabel">Em espera</span></div></div>
+        <div class="room-grid">
+          <div class="stage-column">
+            <div class="screen-stage" id="screenStage">
+              <div id="stageEmpty" class="stage-empty"><div class="stage-empty-icon"><svg viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="currentColor" stroke-width="2.3"><rect x="8" y="11" width="48" height="34" rx="5"/><path d="M22 53h20M32 45v8M27 24l11 7-11 7z"/></svg></div><h3>Nenhuma tela sendo compartilhada</h3><p>Clique em “Compartilhar minha tela” ou aguarde alguém iniciar a apresentação.</p></div>
+              <video id="stageVideo" autoplay playsinline class="hidden" aria-label="Tela compartilhada"></video>
+              <div id="stageLiveIndicator" class="stage-live hidden"><span class="status-dot"></span> AO VIVO</div>
+            </div>
+            <div class="stage-toolbar"><div class="toolbar-left"><span class="soft-dot"></span><span id="stageCaption">Sala pronta para compartilhar</span></div><div class="toolbar-right"><span id="qualityStats" class="quality-stats" aria-live="polite">Qualidade real: aguardando vídeo</span><button id="fullscreenBtn" type="button" class="icon-button" title="Tela cheia" aria-label="Exibir em tela cheia">⛶</button></div></div>
+            <div class="stream-health" id="streamHealth" role="status">
+              <span id="captureHealth">Captura: aguardando</span>
+              <span id="connectionHealth">Rede: aguardando</span>
+              <button id="copyDiagnosticBtn" type="button" class="diagnostic-button">Copiar diagnóstico</button>
+            </div>
+            <div id="qualitySettings" class="quality-settings">
+              <div class="quality-heading"><label class="audio-label" for="qualitySelect">Qualidade da transmissão</label><span class="quality-pill">WebRTC</span></div>
+              <select id="qualitySelect" class="audio-select">
+                <option value="720p30">HD — 720p / 30 FPS</option>
+                <option value="1080p30" selected>Full HD — 1080p / 30 FPS (recomendado)</option>
+                <option value="1080p60">Full HD — 1080p / 60 FPS</option>
+              </select>
+              <p id="qualityInfo" class="audio-explainer"></p>
+            </div>
+            <div id="audioSettings" class="audio-settings">
+              <div class="share-form-title">O que você quer compartilhar?</div>
+              <div class="share-choice-grid" role="radiogroup" aria-label="Tipo de compartilhamento">
+                <label class="share-choice selected" id="screenChoiceCard">
+                  <input type="radio" name="shareSurface" value="screen" checked>
+                  <span class="share-choice-icon" aria-hidden="true">▣</span>
+                  <span><strong>Tela ou janela</strong><small>Seu navegador ou a área de trabalho completa</small></span>
+                </label>
+                <label class="share-choice" id="tabChoiceCard">
+                  <input type="radio" name="shareSurface" value="tab">
+                  <span class="share-choice-icon" aria-hidden="true">▤</span>
+                  <span><strong>Uma aba</strong><small>Vídeo e som de uma única guia</small></span>
+                </label>
+              </div>
+              <label class="sound-choice" for="shareSound">
+                <input type="checkbox" id="shareSound" checked>
+                <span><strong>Compartilhar som também</strong><small>Se a fonte selecionada permitir</small></span>
+              </label>
+              <p id="audioModeInfo" class="audio-explainer" role="status"></p>
+              <details id="advancedAudioDetails" class="advanced-audio">
+                <summary>Configuração avançada de áudio</summary>
+                <label class="advanced-isolation" for="isolateAudio">
+                  <input type="checkbox" id="isolateAudio">
+                  <span>Usar áudio isolado (sem Discord)</span>
+                </label>
+                <p>É necessário configurar uma fonte virtual <strong>TelaVivaFonte</strong> no computador. O navegador sozinho não exclui o Discord do som geral.</p>
+              </details>
+            </div>
+            <div id="audioFallbackPanel" class="audio-fallback hidden" aria-live="polite">
+              <strong id="audioFallbackTitle">O navegador não disponibilizou áudio</strong>
+              <p id="audioFallbackText">A imagem foi capturada. Escolha como deseja continuar.</p>
+              <div id="fallbackChoices" class="fallback-choices hidden">
+                <button id="fallbackTabBtn" class="fallback-choice" type="button">Usar o som de uma aba <small>O vídeo continua mostrando toda a tela; somente o áudio virá dessa aba.</small></button>
+                <button id="fallbackVirtualBtn" class="fallback-choice" type="button">Usar áudio virtual (Ubuntu) <small>Requer configurar TelaVivaFonte no sistema; você pode deixar o Discord de fora.</small></button>
+                <button id="continueSilentBtn" class="fallback-choice muted-choice" type="button">Continuar sem som <small>Transmitir apenas a imagem.</small></button>
+              </div>
+              <div id="virtualDevicePanel" class="virtual-device-panel hidden">
+                <label class="audio-label" for="virtualAudioInput">Selecione a fonte de áudio isolada</label>
+                <select id="virtualAudioInput" class="audio-select"><option value="">Escolha TelaVivaFonte...</option></select>
+                <div class="virtual-buttons"><button id="refreshAudioInputsBtn" class="copy-button" type="button">Atualizar lista</button><button id="identifyAudioInputsBtn" class="copy-button" type="button">Identificar entradas</button></div>
+                <p id="virtualAudioHelp" class="audio-explainer">A fonte virtual deve estar configurada no Ubuntu. Não selecione o microfone.</p>
+              </div>
+              <div class="fallback-actions">
+                <button id="completeAudioBtn" class="primary-button hidden" type="button">Adicionar áudio</button>
+                <button id="cancelPendingBtn" class="stop-button hidden" type="button">Cancelar</button>
+              </div>
+            </div>
+            <div class="control-row"><button id="shareBtn" class="primary-button" type="button"><span aria-hidden="true">▣</span> Iniciar compartilhamento</button><button id="stopBtn" class="stop-button hidden" type="button">■ Parar compartilhamento</button></div>
+            <div class="audio-feedback"><span id="audioStatus" class="audio-status" aria-live="polite">Áudio: aguardando</span><button id="enableAudioBtn" class="copy-button hidden" type="button">🔊 Ativar som recebido</button></div>
+            <div class="audio-hint">No Windows, o Chrome/Edge pode oferecer áudio da tela inteira. No Ubuntu, normalmente o som nativo funciona só em uma aba; para transmitir outras fontes, use áudio virtual. O som geral pode incluir o Discord.</div>
+          </div>
+          <aside class="room-sidebar">
+            <div class="side-card"><div class="side-header"><h3>Convide alguém</h3><span class="pill-mini">Privado</span></div><p>Compartilhe o código ou o link com quem você deseja convidar.</p><div class="room-code-display" id="roomCodeDisplay">—</div><button id="copyLinkBtn" class="copy-button" type="button"><span aria-hidden="true">▢</span> Copiar link de convite</button></div>
+            <div class="side-card"><div class="side-header"><h3>Participantes</h3><span id="membersCount" class="participants-count">1 / 8</span></div><div class="participant-line"><span class="participant-avatar">EU</span><div><strong>Você</strong><small id="youStatus">Conectado à sala</small></div><span class="online-dot push-right"></span></div><div id="othersRow" class="participant-line hidden"><span class="participant-avatar other">+ </span><div><strong id="othersCount">Outros participantes</strong><small>Assistindo ou aguardando</small></div></div></div>
+            <div class="tip-card"><div class="tip-symbol">✦</div><strong>Dica de privacidade</strong><p>Antes de compartilhar, feche abas ou janelas com senhas e informações pessoais.</p></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <footer class="site-footer"><span>© 2026 TelaViva</span><span>Feito para conectar pessoas, com simplicidade.</span></footer>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>
