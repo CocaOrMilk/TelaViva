@@ -67,3 +67,93 @@
 .fallback-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:13px}
 .audio-fallback .virtual-device-panel{border-top:1px solid #73665a}
 @media(max-width:550px){.share-choice-grid{grid-template-columns:1fr}.share-choice{min-height:72px}.fallback-actions button{width:100%}}
+
+/* v1.5 - mosaico para até 3 telas */
+.video-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:15px}
+.video-grid.hidden{display:none}.video-tile{border:1px solid #354b60;background:#111c2b;border-radius:15px;overflow:hidden;min-width:0}
+.video-tile-title{padding:10px 13px;font-weight:700;font-size:12px;color:#b8e8e0}
+.video-tile video{width:100%;aspect-ratio:16/9;object-fit:contain;background:#03060a;display:block}
+.tile-fullscreen{color:#aedbcf;background:transparent;border:0;padding:10px 13px;cursor:pointer;font-size:12px}
+.sharers-count{font-size:12px;color:#85b3ae;margin:8px 0}
+
+/* v1.6 — escolhas: monitor, janela ou aba */
+@media (min-width: 780px) {.share-choice-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width: 551px) and (max-width: 779px) {.share-choice-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width: 550px) {.share-choice-grid{grid-template-columns:1fr}}
+.share-choice{min-width:0}
+.share-choice strong{font-size:12px}
+.share-choice small{font-size:10.5px}
+
+/* v1.7 — painel de compartilhamento simplificado: só qualidade e som */
+.share-setup{display:flex;flex-direction:column;gap:18px;margin-top:20px;padding:20px;border:1px solid #39576a;background:#132536;border-radius:15px}
+.setup-label{display:block;color:#e5f6f2;font-size:14px;font-weight:850;margin-bottom:10px}
+.sound-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.sound-option{position:relative;display:flex;flex-direction:column;gap:4px;padding:14px 13px;border:1px solid #42576a;border-radius:12px;background:#102130;cursor:pointer;transition:background .2s,border-color .2s;min-width:0}
+.sound-option:hover:not(.disabled){background:#193247;border-color:#7292a0}
+.sound-option.selected{background:#163c39;border-color:#65d6bb;box-shadow:0 0 0 1px #65d6bb66 inset}
+.sound-option.disabled{opacity:.5;cursor:not-allowed}
+.sound-option input{position:absolute;right:11px;top:11px;accent-color:#6ce0bf}
+.sound-option strong{font-size:13px;color:#ecfaf5;margin-right:22px}
+.sound-option small{font-size:11px;color:#a3bbc6;line-height:1.5}
+.setup-note{color:#a3b9c7;font-size:12px;line-height:1.6;margin:10px 0 0;min-height:0}
+.setup-note:empty{display:none}
+.tech-details{margin-top:18px;color:#8da1b7;font-size:12px}
+.tech-details summary{cursor:pointer;font-weight:700}
+@media(max-width:700px){.sound-options{grid-template-columns:1fr}}
+
+/* v1.7 — salas fixas */
+.room-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.room-card{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;color:var(--white);padding:28px;min-height:190px;border:1px solid #344254;border-radius:20px;background:linear-gradient(155deg,#1a2939 0%,#111c2b 100%);transition:transform .15s,border-color .15s}
+.room-card:hover:not(:disabled){transform:translateY(-2px);border-color:#65d6bb}
+.room-card.is-live{border-color:#6e4446;background:linear-gradient(155deg,#2a2330 0%,#111c2b 100%)}
+.room-card strong{font-size:22px;letter-spacing:-.5px}
+.room-card-status{font-size:12px;font-weight:700;color:#8ce8c9}
+.room-card.is-live .room-card-status{color:#ffb1ab}
+.room-card small{font-size:12px;color:#94a7bc}
+.room-card-go{margin-top:auto;font-size:13px;font-weight:800;color:var(--teal)}
+.rooms-loading{color:var(--muted);font-size:13px}
+@media(max-width:800px){.room-cards{grid-template-columns:1fr}}
+
+/* v1.7 — relatório de erro opcional */
+.report-bar{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);z-index:11;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center;max-width:min(640px,92vw);padding:12px 16px;border:1px solid #8e6b49;border-radius:12px;background:#3a2d22;color:#ffe3c4;font-size:12px;box-shadow:0 18px 55px #0009}
+.report-send{background:var(--teal);color:#092923;border:0;border-radius:8px;padding:8px 14px;font-weight:800;font-size:12px}
+.report-dismiss{background:transparent;color:#d8c2a8;border:1px solid #6d5a45;border-radius:8px;padding:8px 12px;font-size:12px}
+
+/* v1.7 — mixer de som do transmissor */
+.mixer{margin-top:18px;padding:18px;border:1px solid #39576a;background:#132536;border-radius:15px}
+.mixer-head{display:flex;flex-direction:column;gap:2px;margin-bottom:12px}
+.mixer-head strong{font-size:14px;color:#e5f6f2}.mixer-head small{font-size:11px;color:#94a7bc}
+.mixer-row{display:grid;grid-template-columns:minmax(90px,170px) 34px 1fr 48px;align-items:center;gap:10px;padding:8px 0;border-top:1px solid #243649}
+.mixer-row.master{border-top:0;grid-template-columns:minmax(90px,170px) 1fr 48px;font-weight:700}
+.mixer-name{font-size:12px;color:#d6e6ef;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mixer-row input[type=range]{width:100%;accent-color:#6ce0bf}
+.mixer-row output{font-size:11px;color:#9fc4bc;text-align:right;font-variant-numeric:tabular-nums}
+.mixer-mute{background:#1a2c3c;border:1px solid #35506a;border-radius:8px;height:30px;font-size:14px}
+.mixer-row.muted .mixer-name,.mixer-row.muted output{opacity:.5}
+
+/* v1.7 — mixer com volume local e da transmissão separados */
+.mixer-app{padding:10px 0;border-top:1px solid #243649}
+.mixer-app.idle .mixer-app-name::after{content:" · sem som agora";font-weight:400;color:#7f93a6}
+.mixer-app.idle{opacity:.65}
+.mixer-app-name{font-size:13px;font-weight:700;color:#e2f0f5;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mixer-line{display:grid;grid-template-columns:34px 118px 1fr 48px;align-items:center;gap:10px;padding:3px 0}
+.mixer-label{font-size:12px;color:#b9d0da}
+.mixer-line input[type=range]{width:100%;accent-color:#6ce0bf}
+.mixer-line[data-which=tx] input[type=range]{accent-color:#9bb8ff}
+.mixer-line output{font-size:11px;color:#9fc4bc;text-align:right;font-variant-numeric:tabular-nums}
+.mixer-line.muted .mixer-label,.mixer-line.muted output{opacity:.5}
+@media(max-width:560px){.mixer-line{grid-template-columns:34px 1fr 44px}.mixer-label{grid-column:2/4}.mixer-line input[type=range]{grid-column:2/3}}
+
+.sharp-toggle{display:flex;gap:8px;align-items:flex-start;margin:10px 0 4px;font-size:12px;color:#a9bccb;line-height:1.5}.sharp-toggle input{margin-top:2px;accent-color:#6ce0bf}
+
+/* v1.7 — janela de alterar senha */
+.modal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:16px;background:rgba(5,10,18,.72);backdrop-filter:blur(3px)}
+.modal-card{width:min(420px,100%);display:flex;flex-direction:column;gap:8px;padding:28px;border:1px solid #314051;border-radius:20px;background:linear-gradient(145deg,#1b2738,#111b29);box-shadow:0 30px 80px #050a12cc}
+.modal-card h2{margin:0 0 6px;font-size:22px;letter-spacing:-.5px}
+.modal-card label{color:#e0ebf4;font-size:12px;font-weight:700;margin-top:6px}.modal-card label small{color:#8ea3b8;font-weight:400}
+.modal-card input[type=password],.modal-card input[type=text]{background:#0d1725;color:var(--white);border:1px solid #344459;padding:12px 14px;border-radius:10px;outline:none;font:inherit}
+.modal-card input:focus{border-color:#68d7be;box-shadow:0 0 0 3px #68d7be25}
+.modal-card .pw-show{display:flex;gap:8px;align-items:center;font-weight:400;color:#a9bccb;margin-top:4px}
+.modal-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}.modal-actions .primary-button{flex:1;gap:8px}
+
+.sharp-toggle select{background:#0d1b2a;color:#e9f6fa;border:1px solid #456173;border-radius:8px;padding:4px 8px;font:inherit;font-size:12px}

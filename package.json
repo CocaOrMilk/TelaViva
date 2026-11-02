@@ -1,13 +1,15 @@
 {
   "name": "tela-viva",
-  "version": "1.4.0",
+  "version": "1.7.0",
   "private": true,
-  "description": "Compartilhamento de tela com audio isolado, interface simplificada, diagnostico WebRTC, qualidade HD/Full HD, audio nativo de janela/tela quando suportado, login e WebRTC",
+  "description": "TelaViva: compartilhamento de tela ao vivo em salas privadas, com login, WebRTC P2P, áudio por programa (app desktop) e relatórios de erro",
+  "author": "Filipe F. Nunes <filipezr2@hotmail.com> (https://github.com/CocaOrMilk)",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "criar-usuario": "node scripts/create-user.js",
-    "alterar-senha": "node scripts/change-password.js"
+    "alterar-senha": "node scripts/change-password.js",
+    "test": "node --test tests/*.test.cjs"
   },
   "engines": {
     "node": ">=20"

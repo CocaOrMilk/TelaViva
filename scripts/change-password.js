@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline/promises');
 
-const file = path.join(__dirname, '..', 'data', 'users.json');
+const file = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'users.json');
 
 function askHidden(prompt) {
   return new Promise((resolve, reject) => {

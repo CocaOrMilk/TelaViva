@@ -1,0 +1,14 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Endereço do servidor</title>
+<style>body{font:14px system-ui,sans-serif;background:#161a22;color:#e8eaf0;padding:20px}
+input{width:100%;box-sizing:border-box;padding:8px;margin:10px 0;border-radius:6px;border:1px solid #3a4152;background:#1f2430;color:inherit}
+button{padding:8px 16px;border-radius:6px;border:0;background:#5b8cff;color:#fff;cursor:pointer}</style></head><body>
+<label for="u">Endereço do TelaViva (o app reinicia ao salvar):</label>
+<input id="u" autofocus><button id="ok">Salvar</button>
+<script>
+document.getElementById('u').value = new URLSearchParams(location.search).get('current') || '';
+const save = () => picker.saveUrl(document.getElementById('u').value.trim());
+document.getElementById('ok').onclick = save;
+document.getElementById('u').onkeydown = (e) => { if (e.key === 'Enter') save(); };
+</script></body></html>

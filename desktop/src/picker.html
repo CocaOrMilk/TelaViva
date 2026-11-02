@@ -1,0 +1,33 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Escolha o que compartilhar</title>
+<style>
+body{margin:0;font:14px system-ui,sans-serif;background:#161a22;color:#e8eaf0;padding:16px}
+h2{margin:0 0 12px;font-size:16px}h3{margin:16px 0 8px;font-size:13px;color:#9aa4b5;text-transform:uppercase}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+button.card{background:#1f2430;border:2px solid transparent;border-radius:8px;padding:8px;color:inherit;cursor:pointer;text-align:left}
+button.card:hover,button.card:focus{border-color:#5b8cff;outline:0}
+img{width:100%;display:block;border-radius:4px;background:#000}
+span{display:block;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cancel{margin-top:16px;padding:8px 16px;border-radius:6px;border:1px solid #3a4152;background:transparent;color:inherit;cursor:pointer}
+</style></head><body>
+<h2>Escolha o que compartilhar</h2><div id="root"></div>
+<button class="cancel" id="cancel">Cancelar</button>
+<script>
+document.getElementById('cancel').onclick = () => picker.choose(null);
+picker.onSources((sources) => {
+  const root = document.getElementById('root');
+  for (const [title, isScreen] of [['Telas', true], ['Janelas', false]]) {
+    const list = sources.filter((s) => s.isScreen === isScreen);
+    if (!list.length) continue;
+    const h = document.createElement('h3'); h.textContent = title; root.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'grid'; root.appendChild(grid);
+    for (const s of list) {
+      const b = document.createElement('button'); b.className = 'card';
+      const img = document.createElement('img'); img.src = s.thumb;
+      const label = document.createElement('span'); label.textContent = s.name;
+      b.append(img, label); b.onclick = () => picker.choose(s.id); grid.appendChild(b);
+    }
+  }
+});
+</script></body></html>

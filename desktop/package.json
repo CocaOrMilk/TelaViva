@@ -1,0 +1,57 @@
+{
+  "name": "telaviva-desktop",
+  "productName": "TelaViva",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Cliente desktop portable do TelaViva com áudio da transmissão sem o Discord",
+  "author": "Filipe F. Nunes <filipezr2@hotmail.com> (https://github.com/CocaOrMilk)",
+  "main": "src/main.js",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron . --no-sandbox",
+    "test": "node --test tests/",
+    "dist:linux": "electron-builder --linux",
+    "dist:win": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.telaviva.desktop",
+    "productName": "TelaViva",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "category": "Network",
+      "artifactName": "TelaViva-${version}-linux-x86_64.${ext}",
+      "extraFiles": [
+        {
+          "from": "build/TelaViva.sh",
+          "to": "TelaViva.sh"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "artifactName": "TelaViva-${version}-windows-portable.${ext}",
+      "extraResources": [
+        {
+          "from": "build/win/tv-audio-win.exe",
+          "to": "tv-audio-win.exe"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
+  }
+}

@@ -1,32 +1,58 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+// ---- registro local de eventos ----------------------------------------
+// Fica só neste navegador. Só vai ao servidor se a pessoa clicar em "Enviar relatório".
+const logBuffer = [];
+function logEvent(type, msg) {
+  logBuffer.push({ t: Date.now(), type, msg: String(msg ?? '').slice(0, 400) });
+  if (logBuffer.length > 80) logBuffer.shift();
+}
+let lastReportOffer = 0;
+function offerReport() {
+  const bar = document.getElementById('reportBar');
+  if (!bar || Date.now() - lastReportOffer < 60000) return;
+  lastReportOffer = Date.now();
+  const desktopApp = window.telavivaDesktop;
+  if (desktopApp?.report) { // app desktop: envia sozinho (se "Enviar relatórios de erro automaticamente" estiver ligado no menu)
+    desktopApp.report.isAuto().then((auto) => { if (auto) sendReport(true); else bar.classList.remove('hidden'); }).catch(() => bar.classList.remove('hidden'));
+    return;
+  }
+  bar.classList.remove('hidden');
+}
+window.addEventListener('error', (e) => { logEvent('js-error', `${e.message} @ ${(e.filename || '').split('/').pop()}:${e.lineno}`); offerReport(); });
+window.addEventListener('unhandledrejection', (e) => { logEvent('promise', e.reason?.message || e.reason); offerReport(); });
+for (const level of ['warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => { logEvent(`console.${level}`, args.map((a) => a?.message || String(a)).join(' ')); original(...args); };
+}
 const views = { auth: $('authView'), dashboard: $('dashboardView'), room: $('roomView') };
 const stageVideo = $('stageVideo');
 const stageEmpty = $('stageEmpty');
 let socket = null;
 let currentRoom = null;
-let currentHost = null;
+let activeSharers = new Set();
 let localStream = null;
 let sourceStreams = []; // Streams originais são encerrados com a transmissão.
 let pendingScreenStream = null;
 let pendingMode = null;
 let pendingRoom = null;
 let activeAudioMode = null;
+let desktopRoutedAudio = false;
 let availableAudioDevices = new Map();
-let remoteReceivedStream = null;
 let isPresenter = false;
-let viewerPeer = null;
-let viewerPeerId = null;
+let viewerPeers = new Map();
+let remoteStreams = new Map();
+let videoTiles = new Map();
 let peers = new Map();
 let iceQueue = new Map();
-let config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], maxMembers: 8 };
+let config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], maxMembers: 8, maxSharers: 3 };
 let toastTimer;
 // Perfis de transmissão: limites desejados, não garantias de rede/codificador.
 const QUALITY_PROFILES = Object.freeze({
-  '720p30': { width: 1280, height: 720, fps: 30, bitrate: 3_000_000, label: 'HD 720p · 30 FPS' },
-  '1080p30': { width: 1920, height: 1080, fps: 30, bitrate: 6_000_000, label: 'Full HD 1080p · 30 FPS' },
-  '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 10_000_000, label: 'Full HD 1080p · 60 FPS' }
+  '720p30': { width: 1280, height: 720, fps: 30, bitrate: 4_000_000, label: 'HD 720p · 30 FPS' },
+  '1080p30': { width: 1920, height: 1080, fps: 30, bitrate: 8_000_000, label: 'Full HD 1080p · 30 FPS' },
+  '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 14_000_000, label: 'Full HD 1080p · 60 FPS' }
 });
 let activeQuality = null;
 let statsTimer = null;
@@ -76,12 +102,43 @@ function showView(name) {
   $('topPrivate').classList.toggle('hidden', name === 'auth');
 }
 function toast(message, error = false) {
+  if (error) { logEvent('erro', message); offerReport(); }
   const element = $('toast');
   element.textContent = message;
   element.classList.toggle('error', error);
   element.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.classList.remove('show'), 4500);
+}
+async function sendReport(automatic = false) {
+  const describe = (map, dir) => [...map.entries()].map(([id, p]) => `${dir} ${String(id).slice(0, 4)}: ${p.connectionState}/${p.iceConnectionState}`);
+  const context = {
+    app: 'TelaViva 1.7', ua: navigator.userAgent, online: navigator.onLine,
+    desktop: window.telavivaDesktop ? { platform: window.telavivaDesktop.platform } : null,
+    room: currentRoom, presenter: isPresenter, sharers: activeSharers.size,
+    quality: (activeQuality || selectedQuality()).label, sound: soundMode(),
+    capture: diagnosticState.capture, network: diagnosticState.network, lastVideo: diagnosticState.lastVideo,
+    uplinkMbps: uplinkMbps ? +uplinkMbps.toFixed(1) : null, codecChoice: $('codecSelect')?.value || 'auto', priority: preferSharp() ? 'nitidez' : 'fluidez',
+    peers: [...describe(peers, 'envio'), ...describe(viewerPeers, 'recepção')],
+    turn: (config.iceServers || []).map((server) => [].concat(server.urls).join(',')) // sem usuário/senha
+  };
+  let events = logBuffer;
+  if (window.telavivaDesktop) { // junta o que o app desktop registrou (áudio, helper, processos internos)
+    try {
+      context.desktop = await window.telavivaDesktop.info();
+      const appEvents = (await window.telavivaDesktop.report.mainEvents()).map((e) => ({ ...e, type: `app:${e.type}` }));
+      events = [...appEvents, ...logBuffer].sort((a, b) => a.t - b.t).slice(-100);
+      context.automatic = automatic;
+    } catch { /* segue só com o que a página tem */ }
+  }
+  const button = $('reportSendBtn');
+  button.disabled = true;
+  try {
+    const result = await api('/api/report', { method: 'POST', body: JSON.stringify({ events, context, note: automatic ? 'automático (app desktop)' : '' }) });
+    $('reportBar').classList.add('hidden');
+    toast(automatic ? `Um relatório de erro foi enviado automaticamente. Código: ${result.id}` : `Relatório enviado. Código: ${result.id}`);
+  } catch (e) { if (!automatic) toast(`Não foi possível enviar o relatório: ${e.message}`, true); }
+  finally { button.disabled = false; }
 }
 function setLive(value) {
   $('livePill').classList.toggle('is-live', value);
@@ -93,57 +150,66 @@ function updateRoomStatus(text, caption = text) {
   $('stageCaption').textContent = caption;
 }
 function updateControls() {
-  const busy = Boolean(pendingScreenStream);
-  $('shareBtn').classList.toggle('hidden', busy || isPresenter || Boolean(currentHost));
+  const full = activeSharers.size >= (config.maxSharers || 3);
+  $('shareBtn').classList.toggle('hidden', isPresenter || full);
   $('stopBtn').classList.toggle('hidden', !isPresenter);
   $('youStatus').textContent = isPresenter
     ? (localStream?.getAudioTracks().length ? 'Compartilhando tela e som' : 'Compartilhando tela sem som')
     : 'Conectado à sala';
-  $('audioSettings').classList.toggle('hidden', busy || isPresenter || Boolean(currentHost));
-  $('audioFallbackPanel').classList.toggle('hidden', !busy);
-  $('fallbackChoices').classList.toggle('hidden', pendingMode !== 'pick');
-  $('virtualDevicePanel').classList.toggle('hidden', pendingMode !== 'virtual');
-  const needsAudioStep = pendingMode === 'virtual' || pendingMode === 'screen-tab';
-  $('completeAudioBtn').classList.toggle('hidden', !needsAudioStep);
-  $('completeAudioBtn').textContent = pendingMode === 'screen-tab' ? 'Selecionar a aba com som' : 'Adicionar som à transmissão';
-  $('cancelPendingBtn').classList.toggle('hidden', !busy);
-  $('shareBtn').disabled = busy || isPresenter || Boolean(currentHost);
-  $('qualitySettings').classList.toggle('hidden', Boolean(currentHost) && !isPresenter);
-  $('qualitySelect').disabled = busy || isPresenter || Boolean(currentHost);
-  if (busy) updateFallbackMessage();
+  $('shareSetup').classList.toggle('hidden', isPresenter || full);
+  $('shareBtn').disabled = isPresenter || full;
+  $('sharersCount').textContent = `${activeSharers.size} / ${config.maxSharers || 3} transmitindo`;
 }
 function updateMembers(info) {
   $('membersCount').textContent = `${info.members} / ${config.maxMembers}`;
   $('othersRow').classList.toggle('hidden', info.members <= 1);
   $('othersCount').textContent = `${info.members - 1} outra(s) pessoa(s)`;
 }
-function updateAudioStatus(stream, own = false) {
-  const hasAudio = Boolean(stream?.getAudioTracks().length);
-  $('audioStatus').textContent = hasAudio ? (own ? 'Áudio: enviando' : 'Áudio: recebido') : 'Áudio: ausente';
-  $('enableAudioBtn').classList.toggle('hidden', own || !hasAudio);
+function updateAudioStatus() {
+  const remoteAudio = [...remoteStreams.values()].some((stream) => stream.getAudioTracks().length);
+  $('audioStatus').textContent = isPresenter ? 'Áudio local: ' + (localStream?.getAudioTracks().length ? 'enviando' : 'desligado')
+    : remoteAudio ? 'Áudio: recebido' : 'Áudio: aguardando';
+  $('enableAudioBtn').classList.toggle('hidden', !remoteAudio);
 }
-function displayStream(stream, own = false) {
-  // O evento ontrack pode chegar separadamente para vídeo e áudio.
-  // Não redefinir srcObject nem reiniciar play() a cada trilha evita flashes
-  // desnecessários e preserva a reprodução já iniciada.
-  const changed = stageVideo.srcObject !== stream;
-  if (changed) stageVideo.srcObject = stream;
-  stageVideo.muted = own;
-  updateAudioStatus(stream, own);
-  stageVideo.controls = !own;
-  stageVideo.classList.remove('hidden');
-  stageEmpty.classList.add('hidden');
-  if (changed || stageVideo.paused) {
-    stageVideo.play().catch(() => { if (!own) toast('Use o botão Ativar som ou clique no vídeo para reproduzir.'); });
+function renderTiles() {
+  const container = $('videoGrid');
+  const streams = new Map(remoteStreams);
+  if (isPresenter && localStream) streams.set('local', localStream);
+  for (const [id, tile] of videoTiles) {
+    if (!streams.has(id)) { tile.video.srcObject = null; tile.card.remove(); videoTiles.delete(id); }
   }
+  for (const [id, stream] of streams) {
+    let tile = videoTiles.get(id);
+    if (!tile) {
+      const card = document.createElement('div'); card.className = 'video-tile';
+      const header = document.createElement('div'); header.className = 'video-tile-title';
+      const video = document.createElement('video'); video.autoplay = true; video.playsInline = true;
+      video.controls = id !== 'local'; video.muted = id === 'local';
+      const fullscreen = document.createElement('button'); fullscreen.type = 'button';
+      fullscreen.textContent = '⛶ Tela cheia'; fullscreen.className = 'tile-fullscreen';
+      fullscreen.onclick = () => video.requestFullscreen?.();
+      header.textContent = id === 'local' ? 'Sua tela (prévia sem som)' : `Tela de participante ${[...activeSharers].indexOf(id) + 1}`;
+      card.append(header, video, fullscreen); container.append(card);
+      tile = { card, header, video }; videoTiles.set(id, tile);
+    }
+    if (tile.video.srcObject !== stream) tile.video.srcObject = stream;
+    tile.video.muted = id === 'local';
+    tile.video.play().catch(() => {});
+  }
+  for (const [id, tile] of videoTiles) tile.header.textContent = id === 'local' ? 'Sua tela (prévia sem som)' : `Tela de participante ${Math.max(1, [...activeSharers].indexOf(id) + 1)}`;
+  container.classList.toggle('hidden', streams.size === 0);
+  stageEmpty.classList.toggle('hidden', streams.size > 0);
+  $('screenStage').classList.toggle('hidden', streams.size > 0);
+  $('stageLiveIndicator').classList.add('hidden');
+  setLive(streams.size > 0);
+  updateAudioStatus();
+}
+function displayStream(stream, own = false, host = null) {
+  if (!own && host) remoteStreams.set(host, stream);
+  renderTiles();
 }
 function hideStream() {
-  stageVideo.pause();
-  stageVideo.srcObject = null;
-  $('audioStatus').textContent = 'Áudio: aguardando';
-  $('enableAudioBtn').classList.add('hidden');
-  stageVideo.classList.add('hidden');
-  stageEmpty.classList.remove('hidden');
+  renderTiles();
   previousStats = null;
   $('qualityStats').textContent = 'Qualidade real: aguardando vídeo';
   diagnosticState.lastVideo = 'sem dados';
@@ -180,36 +246,50 @@ function emitAck(event, payload) {
     else socket.timeout(7000).emit(event, payload, callback);
   });
 }
-function getConnection(id) {
-  return isPresenter ? peers.get(id) : viewerPeerId === id ? viewerPeer : null;
+// Evita pedidos de vídeo duplicados: o servidor avisa a mesma transmissão por mais
+// de um caminho (share:available, room:members, entrada na sala). Duas ofertas
+// seguidas faziam a resposta da primeira ser aplicada à segunda e a conexão
+// travava até falhar ("às vezes").
+const streamRequests = new Map(); // host -> instante do último pedido
+const viewerRetries = new Map();  // host -> tentativas de reconexão
+const lastOfferAt = new Map();    // espectador -> instante da última oferta enviada
+function requestStream(host, force = false) {
+  if (!socket?.connected || !host || host === socket.id) return;
+  const now = Date.now();
+  if (!force && (viewerPeers.has(host) || now - (streamRequests.get(host) || 0) < 8000)) return;
+  streamRequests.set(host, now);
+  socket.emit('viewer:ready', { host });
 }
-function clearPeer(id) {
-  const peer = peers.get(id);
-  if (peer) { peer.close(); peers.delete(id); }
-  iceQueue.delete(id);
+function retryViewer(host) {
+  if (!currentRoom || !activeSharers.has(host)) return;
+  const attempt = (viewerRetries.get(host) || 0) + 1;
+  viewerRetries.set(host, attempt);
+  if (attempt > 3) {
+    toast('Não foi possível receber a transmissão. Verifique VPN ou firewall (o servidor de relay usa a porta 3478) e entre na sala de novo.', true);
+    return;
+  }
+  if (attempt === 1) toast('Conexão de vídeo instável. Reconectando…');
+  clearViewerPeer(host);
+  setTimeout(() => { if (currentRoom && activeSharers.has(host) && !viewerPeers.has(host)) requestStream(host, true); }, 800 * attempt);
 }
-function clearViewerPeer() {
-  if (viewerPeer) viewerPeer.close();
-  viewerPeer = null;
-  viewerPeerId = null;
-  remoteReceivedStream = null;
+function iceKey(id, target) { return `${target}:${id}`; }
+function getConnection(id, target = 'viewer') {
+  return target === 'presenter' ? peers.get(id) : viewerPeers.get(id);
 }
-
+function clearPeer(id) { const pc = peers.get(id); if (pc) { pc.close(); peers.delete(id); rebalanceBitrates(); } iceQueue.delete(iceKey(id, 'presenter')); }
+function clearViewerPeer(id) {
+  const peer = viewerPeers.get(id); if (peer) peer.close(); viewerPeers.delete(id);
+  remoteStreams.delete(id); iceQueue.delete(iceKey(id, 'viewer')); renderTiles();
+}
 function cleanupPeers() {
-  peers.forEach((peer) => peer.close());
-  peers.clear();
-  clearViewerPeer();
-  iceQueue.clear();
+  for (const peer of peers.values()) peer.close(); peers.clear();
+  for (const peer of viewerPeers.values()) peer.close(); viewerPeers.clear();
+  remoteStreams.clear(); iceQueue.clear(); renderTiles();
 }
 function resetPlayback() {
-  setCaptureHealth('aguardando');
-  setNetworkHealth('aguardando');
-  cleanupPeers();
-  currentHost = null;
-  setLive(false);
-  hideStream();
-  updateRoomStatus('Aguardando compartilhamento de tela', 'Sala pronta para compartilhar');
-  updateControls();
+  setCaptureHealth('aguardando'); setNetworkHealth('aguardando');
+  cleanupPeers(); activeSharers.clear(); setLive(false); hideStream();
+  updateRoomStatus('Aguardando compartilhamento de tela', 'Sala pronta para compartilhar'); updateControls();
 }
 function stopTracks(stream) {
   stream?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
@@ -218,27 +298,16 @@ function stopLocalShare(notify = true) {
   const wasSharing = isPresenter || Boolean(localStream);
   isPresenter = false;
   const streams = [...sourceStreams, pendingScreenStream, localStream];
-  sourceStreams = [];
-  pendingScreenStream = null;
-  pendingMode = null;
-  pendingRoom = null;
+  sourceStreams = []; pendingScreenStream = null; pendingMode = null; pendingRoom = null;
   localStream = null;
   if (notify && wasSharing && socket?.connected) socket.emit('share:stop');
   new Set(streams.filter(Boolean)).forEach(stopTracks);
-  activeQuality = null;
-  activeAudioMode = null;
-  resetPlayback();
-  updateAudioModeInfo();
-}
-function discardPendingShare() {
-  stopTracks(pendingScreenStream);
-  pendingScreenStream = null;
-  pendingMode = null;
-  pendingRoom = null;
-  hideStream();
-  updateRoomStatus('Aguardando compartilhamento de tela', 'Sala pronta para compartilhar');
-  updateControls();
-  updateAudioModeInfo();
+  if (wasSharing) activeSharers.delete(socket?.id);
+  for (const id of [...peers.keys()]) clearPeer(id);
+  activeQuality = null; activeAudioMode = null;
+  renderTiles(); updateControls();
+  stopMixer(); stopWindowsAudio();
+  if (desktopRoutedAudio) { desktopRoutedAudio = false; desktop.audio.stop().catch(() => {}); }
 }
 
 function leaveRoomLocal() {
@@ -249,17 +318,94 @@ function leaveRoomLocal() {
   setUrl(null);
   showView('dashboard');
 }
+// ---- banda de upload -------------------------------------------------------
+// Cada espectador é uma conexão com estimativa de banda própria; várias delas disputando o mesmo upload
+// fazem a resolução subir e descer sem parar. Medimos o upload até o servidor e dividimos o orçamento
+// (70% do upload) entre os espectadores, limitando o bitrate de cada um.
+let uplinkMbps = null;
+let uplinkMeasuredAt = 0;
+async function measureUplink() {
+  if (uplinkMbps && Date.now() - uplinkMeasuredAt < 5 * 60 * 1000) return uplinkMbps;
+  try {
+    const size = 2_000_000;
+    const body = new Uint8Array(size);
+    const t0 = performance.now();
+    await api('/api/speedtest', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body });
+    const seconds = (performance.now() - t0) / 1000;
+    uplinkMbps = Math.max(1, (size * 8) / seconds / 1e6);
+    uplinkMeasuredAt = Date.now();
+    logEvent('rede', `upload medido: ${uplinkMbps.toFixed(1)} Mb/s`);
+    const info = $('uplinkInfo'); if (info) info.textContent = `Upload estimado: ${uplinkMbps.toFixed(0)} Mb/s`;
+  } catch (e) { logEvent('rede', `medição de upload falhou: ${e.message}`); }
+  return uplinkMbps;
+}
+function perViewerBitrate(profile, viewers) {
+  const n = Math.max(1, viewers);
+  const budget = uplinkMbps ? uplinkMbps * 1e6 * 0.7 : Infinity;
+  return Math.round(Math.max(1_500_000, Math.min(profile.bitrate, budget / n)));
+}
+function rebalanceBitrates() {
+  if (!isPresenter) return;
+  const profile = activeQuality || selectedQuality();
+  const per = perViewerBitrate(profile, peers.size);
+  for (const pc of peers.values()) {
+    pc.__bitrate = per;
+    const sender = pc.getSenders().find((x) => x.track?.kind === 'video');
+    if (!sender) continue;
+    try { const params = sender.getParameters(); if (params.encodings?.length) { params.encodings[0].maxBitrate = per; sender.setParameters(params).catch(() => {}); } } catch { /* ok */ }
+  }
+}
+// O remetente lê x-google-min/start-bitrate da descrição REMOTA (a resposta): com um piso de bitrate a
+// resolução não despenca por causa de uma estimativa de banda temporariamente baixa.
+function withBitrateHints(sdp, minKbps, startKbps) {
+  const hint = `x-google-min-bitrate=${minKbps};x-google-start-bitrate=${startKbps}`;
+  return sdp.split(/(?=^m=)/m).map((section) => {
+    if (!section.startsWith('m=video')) return section;
+    let out = section;
+    const codecs = [...section.matchAll(/^a=rtpmap:(\d+) (VP8|VP9|AV1|H264)\/90000\r?\n/gim)].map((m) => m[1]);
+    for (const pt of codecs) {
+      const fmtp = new RegExp(`^(a=fmtp:${pt} [^\\r\\n]*)`, 'm');
+      if (fmtp.test(out)) out = out.replace(fmtp, `$1;${hint}`);
+      else out = out.replace(new RegExp(`^(a=rtpmap:${pt} [^\\r\\n]*\\r?\\n)`, 'm'), `$1a=fmtp:${pt} ${hint}\r\n`);
+    }
+    return out;
+  }).join('');
+}
+// Fluidez x nitidez. Capturas de tela são tratadas pelo WebRTC como "conteúdo estático" (prioriza resolução)
+// e, se o computador não dá conta, o FPS despenca (medido: ~27 fps, ou ~10 fps com H.264, no lugar de ~60).
+// 'motion' faz o WebRTC reduzir a resolução antes de reduzir o FPS. 'detail' serve para texto/slides.
+const preferSharp = () => Boolean($('preferSharp')?.checked);
+// Codec: "Automático" (padrão do navegador, VP8) é o mais seguro: o H.264 depende do decodificador de vídeo da
+// placa de quem assiste, e alguns (Windows/Linux) mostram a imagem lavada/clara. H.264 e VP9 ficam como opção.
+function applyCodecPreferences(transceiver) {
+  const choice = $('codecSelect')?.value || 'auto';
+  if (choice === 'auto' || preferSharp() || !transceiver?.setCodecPreferences || !window.RTCRtpSender?.getCapabilities) return;
+  try {
+    const codecs = RTCRtpSender.getCapabilities('video')?.codecs || [];
+    const wanted = codecs.filter((c) => c.mimeType.toLowerCase() === `video/${choice}`);
+    if (!wanted.length) return;
+    transceiver.setCodecPreferences([...wanted, ...codecs.filter((c) => !wanted.includes(c))]);
+  } catch (e) { console.warn('Preferência de codec não aplicada:', e); }
+}
 function createPeer(remoteId, ownStream) {
   const pc = new RTCPeerConnection({ iceServers: config.iceServers });
   pc.onicecandidate = (event) => {
-    if (event.candidate && socket?.connected) socket.emit('signal:ice', { to: remoteId, candidate: event.candidate.toJSON() });
+    if (event.candidate && socket?.connected) socket.emit('signal:ice', { to: remoteId, target: ownStream ? 'viewer' : 'presenter', candidate: event.candidate.toJSON() });
   };
+  const role = ownStream ? 'transmissor' : 'espectador';
+  pc.oniceconnectionstatechange = () => logEvent('ice', `${role} ${String(remoteId).slice(0, 4)}: ice ${pc.iceConnectionState}`);
+  pc.onicecandidateerror = (e) => logEvent('ice-erro', `${e.errorCode} ${e.errorText} ${e.url || ''}`);
   pc.onconnectionstatechange = () => {
-    if ((isPresenter && peers.get(remoteId) === pc) || (!isPresenter && viewerPeer === pc)) {
+    logEvent('rtc', `${role} ${String(remoteId).slice(0, 4)}: ${pc.connectionState}`);
+    if (peers.get(remoteId) === pc || viewerPeers.get(remoteId) === pc) {
       setNetworkHealth(`conexão ${pc.connectionState}`);
     }
-    if (pc.connectionState === 'failed') {
-      toast('A conexão de vídeo falhou. Algumas redes exigem um servidor TURN.', true);
+    if (ownStream || viewerPeers.get(remoteId) !== pc) return; // só o espectador reconecta
+    if (pc.connectionState === 'connected') { viewerRetries.delete(remoteId); clearTimeout(pc.__retryTimer); }
+    else if (pc.connectionState === 'failed') retryViewer(remoteId);
+    else if (pc.connectionState === 'disconnected') {
+      clearTimeout(pc.__retryTimer);
+      pc.__retryTimer = setTimeout(() => { if (viewerPeers.get(remoteId) === pc && pc.connectionState !== 'connected') retryViewer(remoteId); }, 5000);
     }
   };
   if (ownStream) {
@@ -270,10 +416,12 @@ function createPeer(remoteId, ownStream) {
     const sourceWidth = settings.width || profile.width;
     const sourceHeight = settings.height || profile.height;
     const scale = Math.max(1, sourceWidth / profile.width, sourceHeight / profile.height);
-    const encoding = { maxBitrate: profile.bitrate, maxFramerate: profile.fps, scaleResolutionDownBy: scale };
+    const perViewer = perViewerBitrate(profile, peers.size + (peers.has(remoteId) ? 0 : 1));
+    pc.__bitrate = perViewer;
+    const encoding = { maxBitrate: perViewer, maxFramerate: profile.fps, scaleResolutionDownBy: scale };
     if (videoTrack) {
       try {
-        pc.addTransceiver(videoTrack, { direction: 'sendonly', streams: [ownStream], sendEncodings: [encoding] });
+        applyCodecPreferences(pc.addTransceiver(videoTrack, { direction: 'sendonly', streams: [ownStream], sendEncodings: [encoding] }));
       } catch (error) {
         // Fallback para navegadores que não aceitam sendEncodings em addTransceiver.
         console.warn('Limites de codificação não suportados diretamente:', error);
@@ -281,7 +429,7 @@ function createPeer(remoteId, ownStream) {
         try {
           const params = sender.getParameters();
           if (params.encodings?.length) {
-            params.encodings[0].maxBitrate = profile.bitrate;
+            params.encodings[0].maxBitrate = perViewer;
             params.encodings[0].maxFramerate = profile.fps;
             params.encodings[0].scaleResolutionDownBy = scale;
             sender.setParameters(params).catch((e) => console.warn('Não foi possível configurar o bitrate:', e));
@@ -293,18 +441,23 @@ function createPeer(remoteId, ownStream) {
   }
   return pc;
 }
-async function flushIce(id, peer) {
-  const queued = iceQueue.get(id) || [];
-  iceQueue.delete(id);
+async function flushIce(id, peer, target) {
+  const key = iceKey(id, target);
+  const queued = iceQueue.get(key) || [];
+  iceQueue.delete(key);
   for (const candidate of queued) {
     try { await peer.addIceCandidate(candidate); } catch (e) { console.warn('Candidato ICE rejeitado:', e); }
   }
 }
 async function makeOffer(id) {
   if (!isPresenter || !localStream || !currentRoom || !socket?.connected || id === socket.id) return;
+  const existing = peers.get(id);
+  if (existing && Date.now() - (lastOfferAt.get(id) || 0) < 3000 && !['failed', 'closed', 'disconnected'].includes(existing.connectionState)) return; // pedido duplicado
+  lastOfferAt.set(id, Date.now());
   clearPeer(id);
   const pc = createPeer(id, localStream);
   peers.set(id, pc);
+  rebalanceBitrates();
   try {
     await pc.setLocalDescription(await pc.createOffer());
     if (peers.get(id) === pc) socket.emit('signal:offer', { to: id, sdp: pc.localDescription });
@@ -315,79 +468,84 @@ async function makeOffer(id) {
   }
 }
 async function receiveOffer({ from, sdp }) {
-  if (!currentRoom || isPresenter || !currentHost || from !== currentHost) return;
-  clearViewerPeer();
-  remoteReceivedStream = new MediaStream();
-  const pc = createPeer(from, null);
-  viewerPeer = pc;
-  viewerPeerId = from;
+  if (!currentRoom || !activeSharers.has(from) || from === socket.id) return;
+  clearViewerPeer(from);
+  const stream = new MediaStream();
+  remoteStreams.set(from, stream);
+  const pc = createPeer(from, null); viewerPeers.set(from, pc);
   pc.ontrack = (event) => {
-    if (viewerPeer !== pc) return;
-    if (!remoteReceivedStream.getTracks().some((track) => track.id === event.track.id)) {
-      remoteReceivedStream.addTrack(event.track);
-    }
+    if (viewerPeers.get(from) !== pc) return;
+    if (!stream.getTracks().some((track) => track.id === event.track.id)) stream.addTrack(event.track);
     if (event.track.kind === 'video') observeVideoTrack(event.track, false);
-    displayStream(remoteReceivedStream);
-    setLive(true);
-    updateRoomStatus('Você está assistindo ao compartilhamento', 'Recebendo tela em tempo real');
+    displayStream(stream, false, from);
+    updateRoomStatus(`${activeSharers.size} transmissão(ões) ativa(s)`, 'Recebendo telas em tempo real');
   };
+  setTimeout(() => { if (viewerPeers.get(from) === pc && pc.connectionState !== 'connected' && pc.connectionState !== 'closed') retryViewer(from); }, 15000);
   try {
-    await pc.setRemoteDescription(sdp);
-    await flushIce(from, pc);
+    await pc.setRemoteDescription(sdp); await flushIce(from, pc, 'viewer');
     await pc.setLocalDescription(await pc.createAnswer());
-    if (viewerPeer === pc) socket.emit('signal:answer', { to: from, sdp: pc.localDescription });
-  } catch (e) { console.error(e); clearViewerPeer(); toast('Não foi possível reproduzir a transmissão.', true); }
+    if (viewerPeers.get(from) === pc) socket.emit('signal:answer', { to: from, sdp: pc.localDescription });
+  } catch (e) { console.error(e); clearViewerPeer(from); toast('Não foi possível reproduzir uma transmissão.', true); }
 }
 async function receiveAnswer({ from, sdp }) {
   const pc = peers.get(from);
-  if (!isPresenter || !pc) return;
+  if (!isPresenter || !pc || pc.signalingState !== 'have-local-offer') return;
   try {
-    await pc.setRemoteDescription(sdp);
-    await flushIce(from, pc);
+    const maxKbps = Math.round((pc.__bitrate || (activeQuality || selectedQuality()).bitrate) / 1000);
+    const hinted = { type: sdp.type, sdp: withBitrateHints(sdp.sdp, Math.round(maxKbps * 0.45), Math.round(maxKbps * 0.75)) };
+    await pc.setRemoteDescription(hinted);
+    await flushIce(from, pc, 'presenter');
   } catch (e) { console.warn('Resposta de conexão inválida:', e); }
 }
-async function receiveIce({ from, candidate }) {
-  if (!currentRoom) return;
-  const pc = getConnection(from);
+async function receiveIce({ from, candidate, target }) {
+  if (!currentRoom || !['viewer', 'presenter'].includes(target)) return;
+  const pc = getConnection(from, target);
+  const key = iceKey(from, target);
   if (!pc || !pc.remoteDescription) {
-    const queued = iceQueue.get(from) || [];
+    const queued = iceQueue.get(key) || [];
     if (queued.length < 50) queued.push(candidate);
-    iceQueue.set(from, queued);
-    return;
+    iceQueue.set(key, queued); return;
   }
   try { await pc.addIceCandidate(candidate); } catch (e) { console.warn('ICE rejeitado:', e); }
 }
 function bindSocket() {
   socket = io({ reconnectionAttempts: 5 });
   socket.on('connect_error', (error) => toast(error.message || 'Erro de conexão.', true));
-  socket.on('disconnect', () => {
+  socket.on('connect', () => logEvent('socket', 'conectado'));
+  socket.on('disconnect', (reason) => {
+    logEvent('socket', `desconectado: ${reason}`);
     if (currentRoom) {
       leaveRoomLocal();
       toast('Sua conexão caiu. Entre novamente na sala para continuar.', true);
     }
   });
+  socket.on('rooms:list', renderRoomList);
   socket.on('room:members', (info) => {
     if (info.code !== currentRoom) return;
     updateMembers(info);
-    if (!info.hasHost && !isPresenter && currentHost) resetPlayback();
+    const previous = activeSharers;
+    activeSharers = new Set(info.sharers || []);
+    for (const host of previous) if (!activeSharers.has(host)) clearViewerPeer(host);
+    for (const host of activeSharers) {
+      if (host !== socket.id) requestStream(host);
+    }
+    renderTiles(); updateControls();
   });
   socket.on('share:available', ({ host }) => {
     if (!currentRoom || host === socket.id) return;
-    currentHost = host;
-    updateControls();
+    activeSharers.add(host); updateControls();
     updateRoomStatus('Conectando à transmissão...', 'Preparando vídeo da tela compartilhada');
-    socket.emit('viewer:ready');
+    viewerRetries.delete(host); requestStream(host);
   });
-  socket.on('share:ended', () => {
+  socket.on('share:ended', ({ host }) => {
     if (!currentRoom) return;
-    if (isPresenter) stopLocalShare(false);
-    else resetPlayback();
-    toast('O compartilhamento foi encerrado.');
+    activeSharers.delete(host); clearViewerPeer(host); streamRequests.delete(host); viewerRetries.delete(host); renderTiles(); updateControls();
+    toast('Uma transmissão foi encerrada.');
   });
   socket.on('viewer:ready', ({ id }) => { if (isPresenter) makeOffer(id); });
   socket.on('peer:left', ({ id }) => {
-    clearPeer(id);
-    if (viewerPeerId === id) resetPlayback();
+    clearPeer(id); clearViewerPeer(id); activeSharers.delete(id);
+    renderTiles(); updateControls();
   });
   socket.on('signal:offer', (data) => receiveOffer(data));
   socket.on('signal:answer', (data) => receiveAnswer(data));
@@ -398,49 +556,54 @@ async function afterLogin(email) {
   config = await api('/api/config');
   if (!socket) bindSocket();
   showView('dashboard');
-  if (inviteCode && /^[A-F\d]{4}-[A-F\d]{4}-[A-F\d]{4}$/i.test(inviteCode)) {
+  if (!socket.connected) await new Promise((resolve) => socket.once('connect', resolve));
+  refreshRooms();
+  if (inviteCode && /^sala-\d$/i.test(inviteCode)) {
     // Socket.IO ainda pode estar no processo de abertura da conexão.
     if (!socket.connected) await new Promise((resolve) => socket.once('connect', resolve));
     await joinRoom(inviteCode).catch((error) => toast(error.message, true));
   }
 }
 function enterRoom(info) {
-  stopLocalShare(false);
-  currentRoom = info.code;
-  $('roomTitle').textContent = info.code;
-  $('roomCodeDisplay').textContent = info.code;
-  updateMembers(info);
-  resetPlayback();
-  currentHost = info.hostId || null;
-  updateControls();
-  showView('room');
-  setUrl(info.code);
+  measureUplink().then(() => rebalanceBitrates());
+  logEvent('sala', `entrou em ${info.code} (${info.members} pessoa(s), ${(info.sharers || []).length} transmitindo)`);
+  stopLocalShare(false); currentRoom = info.code;
+  $('roomTitle').textContent = info.name || info.code; $('roomCodeDisplay').textContent = info.name || info.code;
+  resetPlayback(); activeSharers = new Set(info.sharers || []);
+  updateMembers(info); updateControls(); showView('room'); setUrl(info.code);
   startStatsMonitor();
-  if (info.hasHost && !isPresenter) {
-    updateRoomStatus('Conectando à transmissão...', 'Aguardando imagens do apresentador');
-    socket.emit('viewer:ready');
-  }
-}
-async function createRoom() {
-  try {
-    const info = await emitAck('room:create');
-    enterRoom(info);
-    toast('Sala criada. Compartilhe o link com quem deseja convidar.');
-  } catch (e) { toast(e.message, true); }
+  streamRequests.clear(); viewerRetries.clear();
+  for (const host of activeSharers) if (host !== socket.id) requestStream(host);
 }
 async function joinRoom(code) {
-  const normalized = String(code).trim().toUpperCase();
-  if (!/^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/.test(normalized)) throw new Error('Informe um código no formato XXXX-XXXX-XXXX.');
-  const info = await emitAck('room:join', { code: normalized });
+  const info = await emitAck('room:join', { code: String(code).trim().toLowerCase() });
   enterRoom(info);
-  toast('Você entrou na sala.');
+}
+function renderRoomList(rooms) {
+  const list = $('roomList');
+  list.replaceChildren();
+  for (const room of rooms || []) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'room-card' + (room.sharers ? ' is-live' : '');
+    const full = room.members >= (room.maxMembers || config.maxMembers);
+    card.disabled = full;
+    const name = document.createElement('strong'); name.textContent = room.name;
+    const status = document.createElement('span'); status.className = 'room-card-status';
+    status.textContent = room.sharers ? `Ao vivo · ${room.sharers} transmitindo` : (room.members ? 'Sem transmissão' : 'Vazia');
+    const people = document.createElement('small');
+    people.textContent = room.members ? `${room.members} ${room.members === 1 ? 'pessoa' : 'pessoas'} na sala` : 'Ninguém na sala';
+    const go = document.createElement('span'); go.className = 'room-card-go'; go.textContent = full ? 'Sala cheia' : 'Entrar →';
+    card.append(name, status, people, go);
+    card.addEventListener('click', () => joinRoom(room.code).catch((e) => toast(e.message, true)));
+    list.appendChild(card);
+  }
+}
+async function refreshRooms() {
+  try { renderRoomList((await emitAck('rooms:list')).rooms); } catch { /* chega pelo evento rooms:list */ }
 }
 // O seletor de qualidade vale para os quatro modos de áudio.
 function selectedQuality() { return QUALITY_PROFILES[$('qualitySelect').value] || QUALITY_PROFILES['1080p30']; }
-function updateQualityInfo() {
-  const profile = selectedQuality();
-  $('qualityInfo').textContent = `${profile.width} × ${profile.height} · até ${profile.fps} FPS · limite de vídeo ${(profile.bitrate / 1_000_000).toFixed(0)} Mb/s por espectador. A qualidade efetiva depende da captura e da conexão.`;
-}
 function captureVideoConstraints(profile, surface) {
   return {
     width: { ideal: profile.width },
@@ -463,108 +626,95 @@ async function tuneVideoTrack(stream, profile) {
     console.warn('Resolução/FPS solicitados não foram aplicados pela fonte:', e);
   }
 }
-// O modo nativo solicita áudio da janela/tela ao navegador, enquanto os modos
-// de aba/virtual continuam permitindo evitar o som de outros programas.
-function nativeCaptureOptions(profile, withAudio = true) { return {
-  video: captureVideoConstraints(profile),
-  audio: withAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
-  // Estes parâmetros apenas pedem que o navegador ofereça áudio.
-  // Nem o sistema operacional nem o seletor podem ser controlados pelo site.
-  selfBrowserSurface: 'exclude',
-  systemAudio: withAudio ? 'include' : 'exclude',
-  windowAudio: withAudio ? 'system' : 'exclude',
-  surfaceSwitching: 'exclude'
-}; }
-function tabCaptureOptions(profile) { return {
-  video: captureVideoConstraints(profile, 'browser'),
-  audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-  monitorTypeSurfaces: 'exclude',
-  selfBrowserSurface: 'exclude',
-  systemAudio: 'exclude',
-  windowAudio: 'exclude',
-  surfaceSwitching: 'exclude'
-}; }
-function assertTabAudio(stream) {
-  const surface = stream.getVideoTracks()[0]?.getSettings()?.displaySurface;
-  if (surface !== 'browser') {
-    throw new Error('Selecione uma ABA do navegador, não a tela ou uma janela. O áudio geral pode conter o Discord.');
-  }
-  if (stream.getAudioTracks().length < 1) {
-    throw new Error('Nenhum áudio recebido. Selecione uma aba e marque "Compartilhar áudio da aba" no navegador.');
-  }
+// Preferências da API: o navegador/app decide o que realmente entrega.
+function displayOptions(profile, withAudio) {
+  return {
+    video: captureVideoConstraints(profile),
+    audio: withAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
+    selfBrowserSurface: 'exclude',
+    systemAudio: withAudio ? 'include' : 'exclude',
+    surfaceSwitching: 'exclude'
+  };
 }
-function shareSurface() { return document.querySelector('input[name="shareSurface"]:checked')?.value || 'screen'; }
-function wantsSound() { return $('shareSound').checked; }
-function audioMode() {
-  if (!wantsSound()) return 'silent';
-  if (shareSurface() === 'tab') return 'tab';
-  return $('isolateAudio').checked ? 'virtual' : 'native';
+const desktop = window.telavivaDesktop || null; // presente só no app TelaViva Desktop
+const desktopRoutes = Boolean(desktop && (desktop.platform === 'linux' || desktop.platform === 'win32')); // áudio roteado pelo app
+let winAudioCtx = null; // Windows: contexto de áudio que toca o PCM vindo do app
+function soundMode() { return document.querySelector('input[name="soundMode"]:checked')?.value || 'none'; }
+function setupSoundOptions() {
+  const nd = document.querySelector('input[value="nodiscord"]');
+  let canExclude = true;
+  if (!desktop) { canExclude = false; $('noDiscordHint').textContent = 'Disponível no app TelaViva Desktop'; }
+  else if (!desktopRoutes) { canExclude = false; $('noDiscordHint').textContent = 'Disponível no Linux e no Windows'; }
+  nd.disabled = !canExclude;
+  if (desktopRoutes) {
+    $('systemHint').textContent = 'Tudo que toca no computador, inclusive o Discord';
+    nd.checked = true; // padrão no app: sem o Discord
+  }
+  updateSoundOptions();
 }
-function updateAudioModeInfo() {
-  document.querySelectorAll('.share-choice').forEach((card) => {
-    card.classList.toggle('selected', card.querySelector('input')?.checked);
+function updateSoundOptions() {
+  document.querySelectorAll('.sound-option').forEach((card) => {
+    const input = card.querySelector('input');
+    card.classList.toggle('selected', input.checked);
+    card.classList.toggle('disabled', input.disabled);
   });
-  const mode = audioMode();
-  $('isolateAudio').disabled = !wantsSound() || shareSurface() === 'tab';
-  const hints = {
-    native: 'Escolha a tela ou janela. Na janela do navegador, marque “Compartilhar áudio”, se aparecer. Caso não apareça, você poderá escolher outra fonte de som. O áudio geral pode incluir o Discord.',
-    tab: 'Escolha uma guia no seletor do navegador e marque “Compartilhar áudio da guia”. O som do Discord desktop não entra nessa captura.',
-    virtual: 'Primeiro escolha a tela ou janela. Depois selecione a fonte virtual TelaVivaFonte para transmitir somente os programas configurados nela.',
-    silent: 'O compartilhamento terá apenas imagem, sem áudio.'
+  const notes = {
+    none: '',
+    system: desktop ? '' : 'Na janela que o navegador abrir, marque “Compartilhar áudio”. Funciona melhor no Chrome/Edge (e ao compartilhar uma aba).',
+    nodiscord: 'O som do Discord (a voz dos amigos) não será transmitido.'
   };
-  $('audioModeInfo').textContent = hints[mode];
+  $('soundNote').textContent = notes[soundMode()] || '';
 }
-function updateFallbackMessage() {
-  if (!pendingScreenStream) return;
-  const messages = {
-    pick: ['O navegador não ofereceu som para essa tela ou janela', 'A captura de vídeo está pronta. No Ubuntu/Chromium isso é comum. Você pode adicionar o som de uma aba, usar uma fonte virtual já configurada ou continuar sem som.'],
-    'screen-tab': ['Adicione o som de uma aba', 'Clique no botão e selecione a aba que está reproduzindo o som. A imagem continuará mostrando a tela ou janela que você escolheu antes.'],
-    virtual: ['Escolha a fonte de áudio do computador', 'Selecione a entrada virtual TelaVivaFonte. Ela precisa ter sido configurada no sistema operacional para não incluir o Discord.']
-  };
-  const [title, detail] = messages[pendingMode] || ['Seleção de som', 'Conclua a seleção para transmitir.'];
-  $('audioFallbackTitle').textContent = title;
-  $('audioFallbackText').textContent = detail;
-}
-async function listAudioInputs() {
-  if (!navigator.mediaDevices?.enumerateDevices) throw new Error('O navegador não oferece seleção de dispositivos.');
-  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'audioinput' && device.deviceId && device.deviceId !== 'default' && device.deviceId !== 'communications');
-  availableAudioDevices = new Map(devices.map((device) => [device.deviceId, device.label]));
-  const select = $('virtualAudioInput');
-  select.replaceChildren(new Option('Escolha uma entrada virtual...', ''));
-  for (const device of devices) {
-    const label = device.label || 'Entrada sem identificação (autorize a lista para ver o nome)';
-    const option = new Option(label, device.deviceId);
-    select.add(option);
-  }
-  $('virtualAudioHelp').textContent = devices.length
-    ? 'Escolha TelaVivaFonte (ou outra fonte virtual configurada). Nunca selecione seu microfone pessoal.'
-    : 'Nenhum dispositivo visível. Crie uma fonte virtual no Ubuntu e atualize a lista.';
-}
-async function unlockInputLabels() {
-  // Permissão local e temporária apenas para descobrir os nomes dos dispositivos.
-  // Não há transmissão nem armazenamento do áudio desta leitura.
-  let probe;
+// Windows: o app envia o áudio já mixado (sem Discord) em blocos PCM; um AudioWorklet transforma isso numa trilha.
+async function captureWindowsAudio() {
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
   try {
-    probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    await listAudioInputs();
-    toast('Lista atualizada. A captura temporária usada para identificar dispositivos foi encerrada.');
-  } catch (e) { toast(`Não foi possível identificar as entradas: ${e.message}`, true); }
-  finally { stopTracks(probe); }
+    await ctx.audioWorklet.addModule(new URL('pcm-worklet.js', document.baseURI).href);
+    const node = new AudioWorkletNode(ctx, 'tv-pcm', { numberOfInputs: 0, outputChannelCount: [2] });
+    const dest = ctx.createMediaStreamDestination();
+    node.connect(dest);
+    desktop.audio.setPcmHandler((buffer) => node.port.postMessage(buffer, [buffer]));
+    await ctx.resume();
+    winAudioCtx = ctx;
+    return dest.stream;
+  } catch (e) { ctx.close().catch(() => {}); throw e; }
+}
+function stopWindowsAudio() {
+  if (!winAudioCtx) return;
+  try { desktop.audio.setPcmHandler(null); } catch { /* sem app */ }
+  winAudioCtx.close().catch(() => {}); winAudioCtx = null;
+}
+// Procura a entrada virtual criada pelo app desktop (TelaVivaFonte) e abre o áudio dela.
+async function captureVirtualAudio() {
+  const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); // só para liberar os nomes
+  stopTracks(probe);
+  let device;
+  for (let i = 0; i < 6 && !device; i++) {
+    device = (await navigator.mediaDevices.enumerateDevices()).find((d) => d.kind === 'audioinput' && /telavivafonte/i.test(d.label));
+    if (!device) await new Promise((r) => setTimeout(r, 400));
+  }
+  if (!device) throw new Error('A fonte de áudio do TelaViva não foi encontrada. Tente novamente.');
+  return navigator.mediaDevices.getUserMedia({ video: false, audio: {
+    deviceId: { exact: device.deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false
+  } });
 }
 async function beginBroadcast(stream, originalStreams, expectedRoom) {
   if (!currentRoom || currentRoom !== expectedRoom || !socket?.connected) throw new Error('Você saiu da sala durante a seleção.');
   if (stream.getVideoTracks().length !== 1 || stream.getAudioTracks().length > 1) throw new Error('Selecione um vídeo e, no máximo, uma fonte de áudio.');
   await emitAck('share:start');
+  const videoTrackForHint = stream.getVideoTracks()[0];
+  if (videoTrackForHint) videoTrackForHint.contentHint = preferSharp() ? 'detail' : 'motion';
+  logEvent('share', `iniciou transmissão: ${stream.getVideoTracks().length} vídeo, ${stream.getAudioTracks().length} áudio, prioridade ${preferSharp() ? 'nitidez' : 'fluidez'}`);
   localStream = stream;
   observeVideoTrack(stream.getVideoTracks()[0], true);
   activeQuality = selectedQuality();
-  activeAudioMode = pendingMode === 'screen-tab' ? 'screen-tab' : pendingMode === 'virtual' ? 'virtual' : audioMode();
+  activeAudioMode = soundMode();
   sourceStreams = originalStreams;
   pendingScreenStream = null;
   pendingMode = null;
   pendingRoom = null;
   isPresenter = true;
-  currentHost = socket.id;
+  activeSharers.add(socket.id);
   updateControls();
   displayStream(stream, true);
   setLive(true);
@@ -579,119 +729,119 @@ async function beginBroadcast(stream, originalStreams, expectedRoom) {
   }
   previousStats = null;
   $('qualityStats').textContent = `Perfil: ${activeQuality.label} · aguardando espectador`;
-  toast(`Transmissão iniciada (${activeQuality.label}). ${!stream.getAudioTracks().length ? 'Sem áudio.' : activeAudioMode === 'native' ? 'A captura do áudio geral pode incluir Discord.' : 'Confirme que apenas o áudio desejado está sendo transmitido.'}`);
+  toast(stream.getAudioTracks().length ? 'Transmissão iniciada com som.' : 'Transmissão iniciada, sem som.');
 }
+
+// ---- mixer de som (app desktop no Linux): volume por programa durante a transmissão ----
+let mixerTimer = null;
+let mixerKeys = '';
+const mixerDebounce = new Map();
+function stopMixer() {
+  clearInterval(mixerTimer); mixerTimer = null; mixerKeys = '';
+  $('mixerPanel').classList.add('hidden'); $('mixerApps').replaceChildren();
+}
+function startMixer() {
+  if (!desktop?.mixer) return;
+  stopMixer();
+  $('mixerPanel').classList.remove('hidden');
+  refreshMixer();
+  mixerTimer = setInterval(refreshMixer, 2000);
+}
+function debounced(key, fn) { clearTimeout(mixerDebounce.get(key)); mixerDebounce.set(key, setTimeout(fn, 80)); }
+const MIXER_LINES = [['local', '🎧', 'Meu som'], ['tx', '📡', 'Transmissão']];
+function buildMixerApp(app) {
+  const box = document.createElement('div'); box.className = 'mixer-app'; box.dataset.key = app.key;
+  const title = document.createElement('div'); title.className = 'mixer-app-name'; title.textContent = app.name; title.title = app.name;
+  box.appendChild(title);
+  for (const [which, icon, label] of MIXER_LINES) {
+    const line = document.createElement('div'); line.className = 'mixer-line'; line.dataset.which = which;
+    const mute = document.createElement('button'); mute.type = 'button'; mute.className = 'mixer-mute';
+    mute.setAttribute('aria-label', `Silenciar ${label.toLowerCase()} de ${app.name}`);
+    const text = document.createElement('span'); text.className = 'mixer-label'; text.textContent = `${icon} ${label}`;
+    const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = (which === 'local' && desktop.platform === 'win32') ? '100' : '150';
+    slider.setAttribute('aria-label', `${label}: volume de ${app.name}`);
+    const out = document.createElement('output');
+    const paint = () => { out.textContent = `${slider.value}%`; mute.textContent = line.dataset.muted === '1' ? '🔇' : '🔊'; line.classList.toggle('muted', line.dataset.muted === '1'); };
+    slider.addEventListener('pointerdown', () => { line.dataset.busy = '1'; });
+    slider.addEventListener('pointerup', () => { delete line.dataset.busy; });
+    slider.addEventListener('input', () => { paint(); debounced(`${app.key}:${which}`, () => desktop.mixer.setVolume(app.key, which, Number(slider.value))); });
+    mute.addEventListener('click', () => { line.dataset.muted = line.dataset.muted === '1' ? '0' : '1'; paint(); desktop.mixer.setMute(app.key, which, line.dataset.muted === '1'); });
+    line.append(mute, text, slider, out);
+    line.paint = paint;
+    box.appendChild(line);
+  }
+  return box;
+}
+async function refreshMixer() {
+  if (!desktop?.mixer || !isPresenter) return;
+  let result;
+  try { result = await desktop.mixer.apps(); } catch { return; }
+  if (!result?.ok) return;
+  const list = $('mixerApps');
+  const keys = result.apps.map((a) => a.key).join('|');
+  if (keys !== mixerKeys) { // lista de programas mudou: refaz só os blocos que faltam/sobram
+    mixerKeys = keys;
+    const existing = new Map([...list.children].map((el) => [el.dataset.key, el]));
+    list.replaceChildren(...result.apps.map((a) => existing.get(a.key) || buildMixerApp(a)));
+  }
+  $('mixerEmpty').classList.toggle('hidden', result.apps.length > 0);
+  for (const app of result.apps) { // sincroniza valores, sem mexer no que a pessoa está arrastando
+    const box = [...list.children].find((el) => el.dataset.key === app.key);
+    if (!box) continue;
+    box.classList.toggle('idle', !app.active);
+    for (const [which] of MIXER_LINES) {
+      const line = box.querySelector(`.mixer-line[data-which="${which}"]`);
+      if (!line || line.dataset.busy) continue;
+      line.querySelector('input').value = String(app[which].volume);
+      line.dataset.muted = app[which].muted ? '1' : '0';
+      line.paint();
+    }
+  }
+  const master = $('mixerMaster');
+  if (!master.dataset.busy) { master.value = String(result.master); $('mixerMasterVal').textContent = `${result.master}%`; }
+}
+$('mixerMaster').addEventListener('pointerdown', (e) => { e.target.dataset.busy = '1'; });
+$('mixerMaster').addEventListener('pointerup', (e) => { delete e.target.dataset.busy; });
+$('mixerMaster').addEventListener('input', (e) => { $('mixerMasterVal').textContent = `${e.target.value}%`; debounced('master', () => desktop.mixer.setMaster(Number(e.target.value))); });
+
 async function startSharing() {
-  if (!currentRoom || currentHost || isPresenter || pendingScreenStream) return;
+  if (!currentRoom || activeSharers.size >= (config.maxSharers || 3) || isPresenter) return;
   if (!navigator.mediaDevices?.getDisplayMedia) {
     toast('Use HTTPS ou http://localhost em um navegador compatível.', true);
     return;
   }
-  const mode = audioMode();
+  const mode = soundMode();
   const room = currentRoom;
   const profile = selectedQuality();
-  let stream;
+  let stream, audioStream, routed = false;
   $('shareBtn').disabled = true;
   try {
-    if (mode === 'tab') {
-      stream = await navigator.mediaDevices.getDisplayMedia(tabCaptureOptions(profile));
-      assertTabAudio(stream);
-      await tuneVideoTrack(stream, profile);
-      await beginBroadcast(stream, [stream], room);
-    } else if (mode === 'silent') {
-      const onlyTab = shareSurface() === 'tab';
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: captureVideoConstraints(profile, onlyTab ? 'browser' : undefined), audio: false,
-        ...(onlyTab ? { monitorTypeSurfaces: 'exclude' } : {}),
-        selfBrowserSurface: 'exclude', systemAudio: 'exclude', windowAudio: 'exclude'
-      });
-      if (onlyTab && stream.getVideoTracks()[0]?.getSettings?.().displaySurface !== 'browser') {
-        throw new Error('Escolha uma aba, ou mude a opção para Tela ou janela.');
-      }
-      await tuneVideoTrack(stream, profile);
-      await beginBroadcast(stream, [stream], room);
-    } else if (mode === 'native') {
-      stream = await navigator.mediaDevices.getDisplayMedia(nativeCaptureOptions(profile, true));
-      await tuneVideoTrack(stream, profile);
-      if (stream.getAudioTracks().length) {
-        await beginBroadcast(stream, [stream], room);
-      } else {
-        // A escolha de áudio é exclusiva do navegador; o site não pode obrigá-lo.
-        if (currentRoom !== room) throw new Error('A sala mudou durante a seleção.');
-        pendingScreenStream = stream;
-        pendingMode = 'pick';
-        pendingRoom = room;
-        stream.getVideoTracks()[0].onended = discardPendingShare;
-        displayStream(stream, true);
-        updateControls();
-        updateRoomStatus('Imagem selecionada, aguardando uma fonte de áudio', 'Escolha uma das opções abaixo.');
-        toast('O navegador retornou vídeo, mas não ofereceu som. Escolha como continuar.', true);
-      }
-    } else if (mode === 'virtual') {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: captureVideoConstraints(profile), audio: false,
-        selfBrowserSurface: 'exclude', systemAudio: 'exclude', windowAudio: 'exclude'
-      });
-      await tuneVideoTrack(stream, profile);
-      if (currentRoom !== room) throw new Error('A sala mudou durante a seleção.');
-      pendingScreenStream = stream;
-      pendingMode = 'virtual';
-      pendingRoom = room;
-      stream.getVideoTracks()[0].onended = discardPendingShare;
-      displayStream(stream, true);
-      updateControls();
-      updateRoomStatus('Imagem selecionada. Agora escolha a fonte virtual de áudio.', 'Selecione TelaVivaFonte abaixo.');
-      listAudioInputs().catch(() => {});
+    if (desktopRoutes && mode !== 'none') {
+      // App desktop: prepara o roteamento. 'system' inclui o Discord; 'nodiscord' o exclui.
+      const r = await desktop.audio.start({ includeDiscord: mode === 'system' });
+      if (!r.ok) throw new Error(r.error || 'Não foi possível preparar o áudio.');
+      routed = true;
     }
-  } catch (e) {
-    if (stream && stream !== localStream && stream !== pendingScreenStream) stopTracks(stream);
-    if (e.name !== 'NotAllowedError') toast(`Não foi possível iniciar: ${e.message}`, true);
-  } finally { $('shareBtn').disabled = false; }
-}
-
-function chooseFallback(mode) {
-  if (pendingMode !== 'pick' || !pendingScreenStream) return;
-  pendingMode = mode;
-  updateControls();
-  if (mode === 'virtual') listAudioInputs().catch(() => {});
-}
-async function continueWithoutSound() {
-  if (pendingMode !== 'pick' || !pendingScreenStream) return;
-  try {
-    await beginBroadcast(pendingScreenStream, [pendingScreenStream], pendingRoom);
-  } catch (e) { toast(e.message, true); }
-}
-
-async function finishSharing() {
-  if (!pendingScreenStream || isPresenter) return;
-  const videoStream = pendingScreenStream;
-  const mode = pendingMode;
-  const room = pendingRoom;
-  let audioStream;
-  $('completeAudioBtn').disabled = true;
-  try {
-    if (mode === 'screen-tab') {
-      audioStream = await navigator.mediaDevices.getDisplayMedia(tabCaptureOptions(selectedQuality()));
-      assertTabAudio(audioStream);
-    } else if (mode === 'virtual') {
-      const deviceId = $('virtualAudioInput').value;
-      const label = availableAudioDevices.get(deviceId) || '';
-      if (!deviceId || !/telavivafonte/i.test(label)) {
-        throw new Error('Escolha uma fonte virtual identificada, como TelaVivaFonte. Microfones comuns não são aceitos.');
-      }
-      audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: {
-        deviceId: { exact: deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false
-      } });
-    } else throw new Error('Modo de áudio inválido.');
-    if (!pendingScreenStream || videoStream !== pendingScreenStream) throw new Error('A seleção de tela foi cancelada.');
-    const audioTrack = audioStream.getAudioTracks()[0];
-    if (!audioTrack) throw new Error('A fonte escolhida não forneceu áudio.');
-    const merged = new MediaStream([videoStream.getVideoTracks()[0], audioTrack]);
-    await beginBroadcast(merged, [videoStream, audioStream], room);
+    stream = await navigator.mediaDevices.getDisplayMedia(displayOptions(profile, !routed && mode !== 'none'));
+    await tuneVideoTrack(stream, profile);
+    let finalStream = stream, sources = [stream];
+    if (routed) {
+      audioStream = desktop.platform === 'win32' ? await captureWindowsAudio() : await captureVirtualAudio();
+      finalStream = new MediaStream([stream.getVideoTracks()[0], audioStream.getAudioTracks()[0]]);
+      sources = [stream, audioStream];
+    } else if (mode !== 'none' && !stream.getAudioTracks().length) {
+      toast('O navegador não enviou som. Na janela de seleção, marque “Compartilhar áudio”. Transmitindo só a imagem.', true);
+    }
+    desktopRoutedAudio = routed;
+    await beginBroadcast(finalStream, sources, room);
+    measureUplink().then(() => rebalanceBitrates());
+    if (routed) startMixer();
   } catch (e) {
     stopTracks(audioStream);
-    if (e.name !== 'NotAllowedError') toast(`Áudio não selecionado: ${e.message}`, true);
-  } finally { $('completeAudioBtn').disabled = false; }
+    if (stream && stream !== localStream) stopTracks(stream);
+    if (routed) { stopWindowsAudio(); desktop.audio.stop().catch(() => {}); }
+    if (e.name !== 'NotAllowedError') toast(`Não foi possível iniciar: ${e.message}`, true);
+  } finally { updateControls(); }
 }
 
 // Mostra estatísticas do fluxo efetivamente recebido/enviado (não só a meta escolhida).
@@ -706,7 +856,7 @@ function startStatsMonitor() {
 }
 async function refreshStreamStats() {
   if (!currentRoom) return;
-  const peer = isPresenter ? peers.values().next().value : viewerPeer;
+  const peer = isPresenter ? peers.values().next().value : viewerPeers.values().next().value;
   if (!peer || peer.connectionState === 'closed') {
     if (isPresenter) setNetworkHealth('aguardando espectador');
     $('qualityStats').textContent = isPresenter && activeQuality
@@ -778,6 +928,37 @@ $('togglePassword').addEventListener('click', () => {
   input.type = input.type === 'password' ? 'text' : 'password';
   $('togglePassword').textContent = input.type === 'password' ? 'Mostrar' : 'Ocultar';
 });
+
+// ---- alterar senha ------------------------------------------------------
+function openPasswordModal() {
+  $('passwordForm').reset(); $('pwError').classList.add('hidden');
+  for (const id of ['pwCurrent', 'pwNew', 'pwConfirm']) $(id).type = 'password';
+  $('passwordModal').classList.remove('hidden');
+  $('pwCurrent').focus();
+}
+function closePasswordModal() { $('passwordModal').classList.add('hidden'); $('passwordForm').reset(); }
+function pwFail(message) { $('pwError').textContent = message; $('pwError').classList.remove('hidden'); }
+$('changePasswordBtn').addEventListener('click', openPasswordModal);
+$('pwCancel').addEventListener('click', closePasswordModal);
+$('passwordModal').addEventListener('click', (e) => { if (e.target === $('passwordModal')) closePasswordModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('passwordModal').classList.contains('hidden')) closePasswordModal(); });
+$('pwShow').addEventListener('change', (e) => { for (const id of ['pwCurrent', 'pwNew', 'pwConfirm']) $(id).type = e.target.checked ? 'text' : 'password'; });
+$('passwordForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('pwError').classList.add('hidden');
+  const currentPassword = $('pwCurrent').value, newPassword = $('pwNew').value;
+  if (newPassword.length < 10) return pwFail('A nova senha deve ter pelo menos 10 caracteres.');
+  if (newPassword !== $('pwConfirm').value) return pwFail('A confirmação não é igual à nova senha.');
+  if (newPassword === currentPassword) return pwFail('A nova senha deve ser diferente da atual.');
+  $('pwSubmit').disabled = true;
+  try {
+    await api('/api/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+    closePasswordModal();
+    toast('Senha alterada com sucesso.');
+  } catch (e) { pwFail(e.message); }
+  finally { $('pwSubmit').disabled = false; }
+});
+
 $('logoutBtn').addEventListener('click', async () => {
   try {
     if (currentRoom) {
@@ -794,36 +975,21 @@ $('logoutBtn').addEventListener('click', async () => {
     toast('Você saiu da sua conta.');
   } catch (e) { toast(e.message, true); }
 });
-$('createRoomBtn').addEventListener('click', createRoom);
-$('joinRoomForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  try { await joinRoom($('roomCodeInput').value); } catch (e) { toast(e.message, true); }
-});
-$('roomCodeInput').addEventListener('input', (event) => {
-  const raw = event.target.value.replace(/[^a-f\d]/gi, '').toUpperCase().slice(0, 12);
-  event.target.value = raw.match(/.{1,4}/g)?.join('-') || '';
-});
 $('leaveRoomBtn').addEventListener('click', async () => {
   stopLocalShare(true);
   if (socket?.connected) await emitAck('room:leave').catch(() => {});
   leaveRoomLocal();
 });
 $('shareBtn').addEventListener('click', startSharing);
-$('completeAudioBtn').addEventListener('click', finishSharing);
-$('cancelPendingBtn').addEventListener('click', () => { discardPendingShare(); toast('Seleção cancelada.'); });
-document.querySelectorAll('input[name="shareSurface"]').forEach((control) => control.addEventListener('change', updateAudioModeInfo));
-$('shareSound').addEventListener('change', updateAudioModeInfo);
-$('isolateAudio').addEventListener('change', updateAudioModeInfo);
-$('fallbackTabBtn').addEventListener('click', () => chooseFallback('screen-tab'));
-$('fallbackVirtualBtn').addEventListener('click', () => chooseFallback('virtual'));
-$('continueSilentBtn').addEventListener('click', continueWithoutSound);
-$('qualitySelect').addEventListener('change', updateQualityInfo);
+$('reportSendBtn').addEventListener('click', sendReport);
+$('reportDismissBtn').addEventListener('click', () => $('reportBar').classList.add('hidden'));
+$('sendReportBtn').addEventListener('click', sendReport);
 $('copyDiagnosticBtn').addEventListener('click', async () => {
   // Sem credenciais, e-mail, código da sala, conteúdo da tela ou IP no relatório.
-  const track = localStream?.getVideoTracks()[0] || pendingScreenStream?.getVideoTracks()[0];
+  const track = localStream?.getVideoTracks()[0];
   const settings = track?.getSettings?.() || {};
   const report = [
-    'TelaViva 1.4 — diagnóstico local',
+    'TelaViva 1.6 — diagnóstico local',
     `Captura: ${diagnosticState.capture}`,
     `WebRTC: ${diagnosticState.network}`,
     `Vídeo: ${diagnosticState.lastVideo}`,
@@ -841,15 +1007,13 @@ $('copyDiagnosticBtn').addEventListener('click', async () => {
     toast('Não foi possível copiar. O diagnóstico foi exibido no console (F12).', true);
   }
 });
-updateQualityInfo();
-$('refreshAudioInputsBtn').addEventListener('click', () => listAudioInputs().catch((e) => toast(e.message, true)));
-$('identifyAudioInputsBtn').addEventListener('click', unlockInputLabels);
 $('enableAudioBtn').addEventListener('click', () => {
-  stageVideo.muted = false;
-  stageVideo.volume = 1;
-  stageVideo.play().then(() => toast('Reprodução do áudio ativada.')).catch((e) => toast(`Clique no vídeo para ouvir: ${e.message}`, true));
+  const videos = [...videoTiles.entries()].filter(([id]) => id !== 'local').map(([, tile]) => tile.video);
+  Promise.allSettled(videos.map((video) => { video.muted = false; video.volume = 1; return video.play(); }))
+    .then(() => toast('Áudio das transmissões ativado.'));
 });
-updateAudioModeInfo();
+document.querySelectorAll('input[name="soundMode"]').forEach((c) => c.addEventListener('change', updateSoundOptions));
+setupSoundOptions();
 renderDiagnostics();
 $('stopBtn').addEventListener('click', () => { stopLocalShare(true); toast('Você parou de compartilhar a tela.'); });
 $('copyLinkBtn').addEventListener('click', async () => {
@@ -861,7 +1025,7 @@ $('copyLinkBtn').addEventListener('click', async () => {
 });
 $('fullscreenBtn').addEventListener('click', async () => {
   try {
-    if (!document.fullscreenElement) await $('screenStage').requestFullscreen();
+    if (!document.fullscreenElement) await ($('videoGrid').classList.contains('hidden') ? $('screenStage') : $('videoGrid')).requestFullscreen();
     else await document.exitFullscreen();
   } catch (e) { toast(`Não foi possível ativar tela cheia: ${e.message}`, true); }
 });
