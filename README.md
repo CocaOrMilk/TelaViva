@@ -98,4 +98,7 @@ Criado e mantido por **Filipe F. Nunes** ([@CocaOrMilk](https://github.com/CocaO
 - Malha P2P (veja acima) e sem SFU; para redes restritivas é necessário um servidor **TURN**.
 - A captura de áudio do sistema por navegador varia muito entre sistemas; o app desktop existe por isso.
 - O `.exe` do Windows não é assinado (o SmartScreen avisa na primeira execução).
-- Ainda não há licença definida: defina uma antes de redistribuir.
+
+## Licença
+
+[MIT](LICENSE) © 2026 Filipe F. Nunes: uso, cópia, modificação e distribuição livres, mantendo o aviso de copyright.

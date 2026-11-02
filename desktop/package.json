@@ -6,7 +6,7 @@
   "description": "Cliente desktop portable do TelaViva com áudio da transmissão sem o Discord",
   "author": "Filipe F. Nunes <filipezr2@hotmail.com> (https://github.com/CocaOrMilk)",
   "main": "src/main.js",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "start": "electron . --no-sandbox",
     "test": "node --test tests/",
