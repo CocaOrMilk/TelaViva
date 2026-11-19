@@ -44,6 +44,7 @@ let isPresenter = false;
 let viewerPeers = new Map();
 let remoteStreams = new Map();
 let videoTiles = new Map();
+let focusedTile = null;
 let peers = new Map();
 let iceQueue = new Map();
 let config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], maxMembers: 8, maxSharers: 3 };
@@ -52,7 +53,10 @@ let toastTimer;
 const QUALITY_PROFILES = Object.freeze({
   '720p30': { width: 1280, height: 720, fps: 30, bitrate: 4_000_000, label: 'HD 720p · 30 FPS' },
   '1080p30': { width: 1920, height: 1080, fps: 30, bitrate: 8_000_000, label: 'Full HD 1080p · 30 FPS' },
-  '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 14_000_000, label: 'Full HD 1080p · 60 FPS' }
+  '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 14_000_000, label: 'Full HD 1080p · 60 FPS' },
+  '1440p30': { width: 2560, height: 1440, fps: 30, bitrate: 14_000_000, label: 'QHD 1440p · 30 FPS' },
+  '1440p60': { width: 2560, height: 1440, fps: 60, bitrate: 22_000_000, label: 'QHD 1440p · 60 FPS' },
+  '2160p30': { width: 3840, height: 2160, fps: 30, bitrate: 25_000_000, label: '4K 2160p · 30 FPS' }
 });
 let activeQuality = null;
 let statsTimer = null;
@@ -93,6 +97,12 @@ function observeVideoTrack(track, local = false) {
   track.addEventListener('unmute', update);
   track.addEventListener('ended', update);
   update();
+}
+function pref(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(`telaviva.${key}`);
+    if (value === null) localStorage.removeItem(`telaviva.${key}`); else localStorage.setItem(`telaviva.${key}`, String(value));
+  } catch { return null; }
 }
 const inviteCode = new URLSearchParams(window.location.search).get('sala');
 
@@ -160,10 +170,83 @@ function updateControls() {
   $('shareBtn').disabled = isPresenter || full;
   $('sharersCount').textContent = `${activeSharers.size} / ${config.maxSharers || 3} transmitindo`;
 }
+// ---- nicks dos participantes ------------------------------------------------
+let myNick = '';
+let roomPeople = new Map(); // id do socket -> { nick, sharing }
+function initials(nick) {
+  const parts = String(nick || '?').trim().split(/\s+/).filter(Boolean);
+  const letters = parts.length > 1 ? [parts[0], parts[parts.length - 1]].map((p) => [...p][0]) : [...(parts[0] || '?')].slice(0, 2);
+  return letters.join('').toUpperCase();
+}
+function nickFor(id) { return roomPeople.get(id)?.nick || 'participante'; }
+function setMyNick(nick) {
+  myNick = nick || '';
+  $('accountBadge').textContent = myNick || $('accountBadge').title;
+  $('youName').textContent = myNick ? `${myNick} (você)` : 'Você';
+  $('youAvatar').textContent = myNick ? initials(myNick) : 'EU';
+}
+// ---- sons da sala (gerados na hora com Web Audio, sem arquivos) -------------
+let soundCtx = null;
+const roomSoundsOn = () => pref('roomSounds') !== '0';
+function playRoomSound(kind) {
+  if (!roomSoundsOn()) return;
+  try {
+    soundCtx ||= new AudioContext();
+    if (soundCtx.state === 'suspended') soundCtx.resume().catch(() => {});
+    // notas (Hz), atraso entre notas (s), duração de cada nota (s), volume
+    const presets = {
+      join: { notes: [659.25, 987.77], gap: 0.11, dur: 0.32, vol: 0.16, type: 'sine' },         // Mi5 → Si5 (subindo)
+      leave: { notes: [783.99, 523.25], gap: 0.13, dur: 0.34, vol: 0.13, type: 'sine' },        // Sol5 → Dó5 (descendo)
+      share: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.075, dur: 0.38, vol: 0.13, type: 'triangle' } // arpejo de Dó
+    };
+    const p = presets[kind];
+    if (!p) return;
+    const start = soundCtx.currentTime + 0.02;
+    const master = soundCtx.createGain(); master.gain.value = p.vol; master.connect(soundCtx.destination);
+    p.notes.forEach((freq, i) => {
+      const t = start + i * p.gap;
+      const osc = soundCtx.createOscillator(); osc.type = p.type; osc.frequency.value = freq;
+      const env = soundCtx.createGain();
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.exponentialRampToValueAtTime(1, t + 0.012);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);
+      osc.connect(env).connect(master);
+      osc.start(t); osc.stop(t + p.dur + 0.02);
+    });
+  } catch (e) { console.warn('Som da sala falhou:', e); }
+}
+// Compara a lista anterior com a nova e toca um som por tipo de mudança (só de outras pessoas).
+function roomSoundsFor(previous, next) {
+  const me = socket?.id;
+  let joined = false, left = false, startedSharing = false;
+  for (const [id, person] of next) {
+    if (id === me) continue;
+    const before = previous.get(id);
+    if (!before) joined = true;
+    if (person.sharing && !before?.sharing) startedSharing = true;
+  }
+  for (const id of previous.keys()) if (id !== me && !next.has(id)) left = true;
+  // a transmissão tem prioridade; entrada/saída tocam com um pequeno intervalo se vierem juntas
+  if (startedSharing) playRoomSound('share');
+  else if (joined) playRoomSound('join');
+  if (left) setTimeout(() => playRoomSound('leave'), startedSharing || joined ? 450 : 0);
+}
 function updateMembers(info) {
   $('membersCount').textContent = `${info.members} / ${config.maxMembers}`;
-  $('othersRow').classList.toggle('hidden', info.members <= 1);
-  $('othersCount').textContent = `${info.members - 1} outra(s) pessoa(s)`;
+  if (Array.isArray(info.people)) roomPeople = new Map(info.people.map((p) => [p.id, { nick: p.nick, sharing: !!p.sharing }]));
+  const list = $('othersList');
+  list.replaceChildren();
+  for (const [id, person] of roomPeople) {
+    if (id === socket?.id) continue;
+    const line = document.createElement('div'); line.className = 'participant-line';
+    const avatar = document.createElement('span'); avatar.className = 'participant-avatar other'; avatar.textContent = initials(person.nick);
+    const text = document.createElement('div'); text.className = 'participant-text';
+    const name = document.createElement('strong'); name.textContent = person.nick; name.title = person.nick;
+    const status = document.createElement('small'); status.textContent = person.sharing ? 'Transmitindo' : 'Assistindo';
+    text.append(name, status); line.append(avatar, text);
+    if (person.sharing) { const dot = document.createElement('span'); dot.className = 'live-dot push-right'; dot.title = 'Ao vivo'; line.append(dot); }
+    list.append(line);
+  }
 }
 function updateAudioStatus() {
   const remoteAudio = [...remoteStreams.values()].some((stream) => stream.getAudioTracks().length);
@@ -171,37 +254,149 @@ function updateAudioStatus() {
     : remoteAudio ? 'Áudio: recebido' : 'Áudio: aguardando';
   $('enableAudioBtn').classList.toggle('hidden', !remoteAudio);
 }
+// Volume e mudo escolhidos por quem assiste, por pessoa que transmite (pelo nick, para sobreviver a
+// reconexões e a um novo compartilhamento). Ficam só na memória desta página.
+const tilePrefs = new Map();
+const tileKey = (id) => (id === 'local' ? 'local' : roomPeople.get(id)?.nick || id);
+// Telas ocultadas por quem assiste (id do socket de quem transmite, ou 'local' para a própria prévia).
+// Tela de outra pessoa oculta = conexão fechada: não baixa vídeo nem som dela.
+const hiddenTiles = new Set();
+const hiddenCards = new Map(); // id -> cartão "tela oculta"
+const isTileHidden = (id) => hiddenTiles.has(id);
+// Tamanho manual de cada tela (pelo nick de quem transmite), salvo neste computador.
+let tileSizes = {};
+try { tileSizes = JSON.parse(pref('tileSizes') || '{}') || {}; } catch { tileSizes = {}; }
+function saveTileSizes() { pref('tileSizes', Object.keys(tileSizes).length ? JSON.stringify(tileSizes) : null); }
+function applyTileSize(id, card) {
+  const size = tileSizes[tileKey(id)];
+  card.classList.toggle('resized', Boolean(size));
+  card.style.width = size ? `${size.w}px` : '';
+  card.style.height = size ? `${size.h}px` : '';
+}
+function resetTileSize(id, card) { delete tileSizes[tileKey(id)]; saveTileSizes(); applyTileSize(id, card); }
+function startTileResize(event, id, card) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const handle = event.currentTarget, grid = $('videoGrid');
+  const rect = card.getBoundingClientRect(), startX = event.clientX, startY = event.clientY;
+  // miniatura ao lado da tela em destaque: no máximo 60% da largura, para a principal não sumir
+  const maxW = () => grid.clientWidth * (grid.classList.contains('has-focus') && !card.classList.contains('featured') && window.innerWidth > 780 ? 0.6 : 1);
+  handle.setPointerCapture(event.pointerId);
+  card.classList.add('resized', 'resizing');
+  const move = (e) => {
+    const w = Math.round(Math.min(maxW(), Math.max(220, rect.width + e.clientX - startX)));
+    const h = Math.round(Math.min(window.innerHeight * 1.5, Math.max(150, rect.height + e.clientY - startY)));
+    card.style.width = `${w}px`; card.style.height = `${h}px`;
+  };
+  const up = () => {
+    handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up);
+    card.classList.remove('resizing');
+    tileSizes[tileKey(id)] = { w: parseInt(card.style.width, 10), h: parseInt(card.style.height, 10) };
+    saveTileSizes();
+  };
+  handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+}
+function hideTile(id) {
+  hiddenTiles.add(id);
+  if (focusedTile === id) focusedTile = null;
+  if (id === 'local') { logEvent('sala', 'ocultou a própria prévia'); renderTiles(); return; }
+  logEvent('sala', `ocultou a tela de ${nickFor(id)} (sem baixar vídeo/som)`);
+  clearViewerPeer(id); streamRequests.delete(id); viewerRetries.delete(id); updateAudioStatus();
+}
+function showTile(id) {
+  hiddenTiles.delete(id);
+  if (id === 'local') { renderTiles(); return; }
+  logEvent('sala', `voltou a mostrar a tela de ${nickFor(id)}`);
+  viewerRetries.delete(id); renderTiles(); requestStream(id, true);
+  // se o transmissor ignorar o pedido (pedido repetido muito rápido), tenta de novo
+  setTimeout(() => { if (currentRoom && activeSharers.has(id) && !isTileHidden(id) && !viewerPeers.has(id)) requestStream(id, true); }, 4000);
+}
+function tileButton(text, title, onClick, extraClass = '') {
+  const button = document.createElement('button'); button.type = 'button';
+  const [icon, ...label] = text.split(' ');
+  const iconEl = document.createElement('span'); iconEl.textContent = icon; iconEl.setAttribute('aria-hidden', 'true');
+  const labelEl = document.createElement('span'); labelEl.className = 'lbl'; labelEl.textContent = ' ' + label.join(' ');
+  button.append(iconEl, labelEl); button.title = title; button.setAttribute('aria-label', label.join(' '));
+  button.className = `tile-action ${extraClass}`.trim();
+  button.onclick = onClick;
+  return button;
+}
 function renderTiles() {
   const container = $('videoGrid');
-  const streams = new Map(remoteStreams);
-  if (isPresenter && localStream) streams.set('local', localStream);
+  const streams = new Map();
+  for (const [id, stream] of remoteStreams) if (!isTileHidden(id)) streams.set(id, stream);
+  const sharingLocal = isPresenter && localStream;
+  if (sharingLocal && !isTileHidden('local')) streams.set('local', localStream);
+  const hiddenIds = [...activeSharers].filter((host) => host !== socket?.id && isTileHidden(host));
+  if (sharingLocal && isTileHidden('local')) hiddenIds.push('local');
   for (const [id, tile] of videoTiles) {
     if (!streams.has(id)) { tile.video.srcObject = null; tile.card.remove(); videoTiles.delete(id); }
+  }
+  for (const [id, card] of hiddenCards) {
+    if (!hiddenIds.includes(id)) { card.remove(); hiddenCards.delete(id); }
   }
   for (const [id, stream] of streams) {
     let tile = videoTiles.get(id);
     if (!tile) {
       const card = document.createElement('div'); card.className = 'video-tile';
       const header = document.createElement('div'); header.className = 'video-tile-title';
+      const title = document.createElement('span');
       const video = document.createElement('video'); video.autoplay = true; video.playsInline = true;
       video.controls = id !== 'local'; video.muted = id === 'local';
-      const fullscreen = document.createElement('button'); fullscreen.type = 'button';
-      fullscreen.textContent = '⛶ Tela cheia'; fullscreen.className = 'tile-fullscreen';
-      fullscreen.onclick = () => video.requestFullscreen?.();
-      header.textContent = id === 'local' ? 'Sua tela (prévia sem som)' : `Tela de participante ${[...activeSharers].indexOf(id) + 1}`;
-      card.append(header, video, fullscreen); container.append(card);
-      tile = { card, header, video }; videoTiles.set(id, tile);
+      if (id !== 'local') {
+        const saved = tilePrefs.get(tileKey(id));
+        if (saved) { video.volume = saved.volume; video.muted = saved.muted; }
+        video.addEventListener('volumechange', () => tilePrefs.set(tileKey(id), { volume: video.volume, muted: video.muted }));
+      }
+      const focus = tileButton('⤢ Destacar', 'Colocar esta tela em destaque', () => { focusedTile = id; renderTiles(); }, 'tile-focus');
+      const resetSize = tileButton('↺ Tamanho', 'Voltar ao tamanho automático', () => resetTileSize(id, card), 'tile-reset-size');
+      const hide = tileButton('◌ Ocultar', id === 'local'
+        ? 'Esconder a sua prévia. Os outros continuam vendo a sua tela.'
+        : 'Esconder esta tela e parar de baixar o vídeo e o som dela (economiza internet)', () => hideTile(id));
+      const fullscreen = tileButton('⛶ Tela cheia', 'Tela cheia', () => video.requestFullscreen?.());
+      const grip = document.createElement('div'); grip.className = 'tile-resize';
+      grip.title = 'Arraste para mudar o tamanho desta tela (duplo clique: tamanho automático)';
+      grip.addEventListener('pointerdown', (e) => startTileResize(e, id, card));
+      grip.addEventListener('dblclick', () => resetTileSize(id, card));
+      header.append(title, focus, resetSize, hide, fullscreen);
+      card.append(header, video, grip); container.append(card);
+      tile = { card, title, video }; videoTiles.set(id, tile);
     }
-    if (tile.video.srcObject !== stream) tile.video.srcObject = stream;
-    tile.video.muted = id === 'local';
-    tile.video.play().catch(() => {});
+    // Só dá play quando o vídeo recebe uma transmissão nova; redesenhar a sala (alguém entrou, saiu,
+    // começou ou parou de transmitir) não mexe mais em pausa, volume nem mudo.
+    if (tile.video.srcObject !== stream) {
+      tile.video.srcObject = stream;
+      tile.video.play().catch(() => {});
+    }
+    if (!tile.card.classList.contains('resizing')) applyTileSize(id, tile.card);
   }
-  for (const [id, tile] of videoTiles) tile.header.textContent = id === 'local' ? 'Sua tela (prévia sem som)' : `Tela de participante ${Math.max(1, [...activeSharers].indexOf(id) + 1)}`;
-  container.classList.toggle('hidden', streams.size === 0);
-  stageEmpty.classList.toggle('hidden', streams.size > 0);
-  $('screenStage').classList.toggle('hidden', streams.size > 0);
+  for (const id of hiddenIds) {
+    let card = hiddenCards.get(id);
+    if (!card) {
+      card = document.createElement('div'); card.className = 'video-tile hidden-tile';
+      const header = document.createElement('div'); header.className = 'video-tile-title';
+      header.append(document.createElement('span'), tileButton('◉ Mostrar', 'Mostrar esta tela de novo', () => showTile(id)));
+      const note = document.createElement('p'); note.className = 'hidden-note';
+      note.textContent = id === 'local' ? 'Sua prévia está oculta. Os outros continuam vendo a sua tela.'
+        : 'Oculta: não está baixando o vídeo nem o som desta transmissão.';
+      card.append(header, note); container.append(card); hiddenCards.set(id, card);
+    }
+    card.querySelector('span').textContent = id === 'local' ? 'Sua tela (prévia oculta)' : `Tela de ${nickFor(id)} (oculta)`;
+  }
+  // Uma tela fica em destaque (por padrão a de outra pessoa, não a sua prévia); as demais viram miniaturas ao lado.
+  const featured = streams.has(focusedTile) ? focusedTile : [...streams.keys()].find((id) => id !== 'local') || 'local';
+  for (const [id, tile] of videoTiles) {
+    tile.title.textContent = id === 'local' ? 'Sua tela (prévia sem som)' : `Tela de ${nickFor(id)}`;
+    tile.card.classList.toggle('featured', id === featured);
+  }
+  const total = streams.size + hiddenIds.length;
+  container.classList.toggle('has-focus', total > 1);
+  $('thumbSizeWrap').classList.toggle('hidden', total < 2);
+  container.classList.toggle('hidden', total === 0);
+  stageEmpty.classList.toggle('hidden', total > 0);
+  $('screenStage').classList.toggle('hidden', total > 0);
   $('stageLiveIndicator').classList.add('hidden');
-  setLive(streams.size > 0);
+  setLive(total > 0);
   updateAudioStatus();
 }
 function displayStream(stream, own = false, host = null) {
@@ -224,7 +419,7 @@ function setUrl(code) {
   history.replaceState(null, '', url);
 }
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`/telaviva${path}`, {
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options
@@ -256,12 +451,13 @@ const lastOfferAt = new Map();    // espectador -> instante da última oferta en
 function requestStream(host, force = false) {
   if (!socket?.connected || !host || host === socket.id) return;
   const now = Date.now();
+  if (isTileHidden(host)) return; // tela oculta: não baixa
   if (!force && (viewerPeers.has(host) || now - (streamRequests.get(host) || 0) < 8000)) return;
   streamRequests.set(host, now);
   socket.emit('viewer:ready', { host });
 }
 function retryViewer(host) {
-  if (!currentRoom || !activeSharers.has(host)) return;
+  if (!currentRoom || !activeSharers.has(host) || isTileHidden(host)) return;
   const attempt = (viewerRetries.get(host) || 0) + 1;
   viewerRetries.set(host, attempt);
   if (attempt > 3) {
@@ -377,12 +573,44 @@ function withBitrateHints(sdp, minKbps, startKbps) {
 const preferSharp = () => Boolean($('preferSharp')?.checked);
 // Codec: "Automático" (padrão do navegador, VP8) é o mais seguro: o H.264 depende do decodificador de vídeo da
 // placa de quem assiste, e alguns (Windows/Linux) mostram a imagem lavada/clara. H.264 e VP9 ficam como opção.
+// Automático: se a placa de vídeo codifica VP9 ou H.264, usa ela (medido nos relatórios: o VP8 padrão roda no
+// processador — libvpx — e com transmitir + assistir juntos a CPU vai ao limite). Sem codificador na placa, fica o VP8.
+let hwCodecProbe = null;
+function detectHardwareCodec() {
+  if (hwCodecProbe) return hwCodecProbe;
+  hwCodecProbe = (async () => {
+    if (!navigator.mediaCapabilities?.encodingInfo || !window.RTCRtpSender?.getCapabilities) return null;
+    const codecs = RTCRtpSender.getCapabilities('video')?.codecs || [];
+    for (const name of ['vp9', 'h264']) {
+      for (const codec of codecs.filter((c) => c.mimeType.toLowerCase() === `video/${name}`)) {
+        try {
+          const info = await navigator.mediaCapabilities.encodingInfo({ type: 'webrtc', video: {
+            contentType: codec.sdpFmtpLine ? `${codec.mimeType};${codec.sdpFmtpLine}` : codec.mimeType,
+            width: 1920, height: 1080, bitrate: 8_000_000, framerate: 60 } });
+          if (info.supported && info.powerEfficient) return { name, codec };
+        } catch { /* tipo 'webrtc' não suportado: segue */ }
+      }
+    }
+    return null;
+  })().then((pick) => { logEvent('video', pick ? `codificador da placa de vídeo: ${pick.name}` : 'sem codificador na placa de vídeo: VP8 no processador'); return pick; },
+    () => null);
+  return hwCodecProbe;
+}
+let hwCodec = null; // resultado de detectHardwareCodec(), preenchido antes de transmitir
 function applyCodecPreferences(transceiver) {
   const choice = $('codecSelect')?.value || 'auto';
-  if (choice === 'auto' || preferSharp() || !transceiver?.setCodecPreferences || !window.RTCRtpSender?.getCapabilities) return;
+  if (!transceiver?.setCodecPreferences || !window.RTCRtpSender?.getCapabilities) return;
   try {
     const codecs = RTCRtpSender.getCapabilities('video')?.codecs || [];
-    const wanted = codecs.filter((c) => c.mimeType.toLowerCase() === `video/${choice}`);
+    let wanted;
+    if (choice === 'auto') {
+      if (!hwCodec) return;
+      const same = codecs.filter((c) => c.mimeType.toLowerCase() === hwCodec.codec.mimeType.toLowerCase());
+      wanted = [...same.filter((c) => c.sdpFmtpLine === hwCodec.codec.sdpFmtpLine), ...same.filter((c) => c.sdpFmtpLine !== hwCodec.codec.sdpFmtpLine)];
+    } else {
+      if (preferSharp() && choice !== 'vp8') return;
+      wanted = codecs.filter((c) => c.mimeType.toLowerCase() === `video/${choice}`);
+    }
     if (!wanted.length) return;
     transceiver.setCodecPreferences([...wanted, ...codecs.filter((c) => !wanted.includes(c))]);
   } catch (e) { console.warn('Preferência de codec não aplicada:', e); }
@@ -400,6 +628,8 @@ function createPeer(remoteId, ownStream) {
     if (peers.get(remoteId) === pc || viewerPeers.get(remoteId) === pc) {
       setNetworkHealth(`conexão ${pc.connectionState}`);
     }
+    // transmissor: espectador que fechou a conexão (ocultou a tela, caiu) deixa de contar na divisão do upload
+    if (ownStream && peers.get(remoteId) === pc && ['failed', 'closed'].includes(pc.connectionState)) { clearPeer(remoteId); return; }
     if (ownStream || viewerPeers.get(remoteId) !== pc) return; // só o espectador reconecta
     if (pc.connectionState === 'connected') { viewerRetries.delete(remoteId); clearTimeout(pc.__retryTimer); }
     else if (pc.connectionState === 'failed') retryViewer(remoteId);
@@ -421,7 +651,14 @@ function createPeer(remoteId, ownStream) {
     const encoding = { maxBitrate: perViewer, maxFramerate: profile.fps, scaleResolutionDownBy: scale };
     if (videoTrack) {
       try {
-        applyCodecPreferences(pc.addTransceiver(videoTrack, { direction: 'sendonly', streams: [ownStream], sendEncodings: [encoding] }));
+        const transceiver = pc.addTransceiver(videoTrack, { direction: 'sendonly', streams: [ownStream], sendEncodings: [encoding] });
+        applyCodecPreferences(transceiver);
+        // Com CPU ou rede no limite, o padrão do WebRTC ("balanced") corta FPS e resolução; aqui só a resolução cai.
+        if (!preferSharp()) {
+          const params = transceiver.sender.getParameters();
+          params.degradationPreference = 'maintain-framerate';
+          transceiver.sender.setParameters(params).catch((e) => logEvent('video', `prioridade de FPS não aplicada: ${e.message}`));
+        }
       } catch (error) {
         // Fallback para navegadores que não aceitam sendEncodings em addTransceiver.
         console.warn('Limites de codificação não suportados diretamente:', error);
@@ -468,7 +705,7 @@ async function makeOffer(id) {
   }
 }
 async function receiveOffer({ from, sdp }) {
-  if (!currentRoom || !activeSharers.has(from) || from === socket.id) return;
+  if (!currentRoom || !activeSharers.has(from) || from === socket.id || isTileHidden(from)) return;
   clearViewerPeer(from);
   const stream = new MediaStream();
   remoteStreams.set(from, stream);
@@ -509,7 +746,7 @@ async function receiveIce({ from, candidate, target }) {
   try { await pc.addIceCandidate(candidate); } catch (e) { console.warn('ICE rejeitado:', e); }
 }
 function bindSocket() {
-  socket = io({ reconnectionAttempts: 5 });
+  socket = io({ path: "/telaviva/socket.io", reconnectionAttempts: 5 });
   socket.on('connect_error', (error) => toast(error.message || 'Erro de conexão.', true));
   socket.on('connect', () => logEvent('socket', 'conectado'));
   socket.on('disconnect', (reason) => {
@@ -522,10 +759,12 @@ function bindSocket() {
   socket.on('rooms:list', renderRoomList);
   socket.on('room:members', (info) => {
     if (info.code !== currentRoom) return;
+    const previousPeople = roomPeople;
     updateMembers(info);
+    if (Array.isArray(info.people)) roomSoundsFor(previousPeople, roomPeople);
     const previous = activeSharers;
     activeSharers = new Set(info.sharers || []);
-    for (const host of previous) if (!activeSharers.has(host)) clearViewerPeer(host);
+    for (const host of previous) if (!activeSharers.has(host)) { hiddenTiles.delete(host); clearViewerPeer(host); }
     for (const host of activeSharers) {
       if (host !== socket.id) requestStream(host);
     }
@@ -539,20 +778,22 @@ function bindSocket() {
   });
   socket.on('share:ended', ({ host }) => {
     if (!currentRoom) return;
-    activeSharers.delete(host); clearViewerPeer(host); streamRequests.delete(host); viewerRetries.delete(host); renderTiles(); updateControls();
+    activeSharers.delete(host); hiddenTiles.delete(host); clearViewerPeer(host); streamRequests.delete(host); viewerRetries.delete(host); renderTiles(); updateControls();
     toast('Uma transmissão foi encerrada.');
   });
   socket.on('viewer:ready', ({ id }) => { if (isPresenter) makeOffer(id); });
   socket.on('peer:left', ({ id }) => {
-    clearPeer(id); clearViewerPeer(id); activeSharers.delete(id);
+    clearPeer(id); hiddenTiles.delete(id); clearViewerPeer(id); activeSharers.delete(id);
     renderTiles(); updateControls();
   });
   socket.on('signal:offer', (data) => receiveOffer(data));
   socket.on('signal:answer', (data) => receiveAnswer(data));
   socket.on('signal:ice', (data) => receiveIce(data));
 }
-async function afterLogin(email) {
-  $('accountBadge').textContent = email;
+async function afterLogin(email, nick, needsNick = false) {
+  $('accountBadge').title = email;
+  setMyNick(nick);
+  if (needsNick) openNickModal(true); // primeiro acesso: precisa escolher o nick (só aparece até salvar uma vez)
   config = await api('/api/config');
   if (!socket) bindSocket();
   showView('dashboard');
@@ -603,7 +844,7 @@ async function refreshRooms() {
   try { renderRoomList((await emitAck('rooms:list')).rooms); } catch { /* chega pelo evento rooms:list */ }
 }
 // O seletor de qualidade vale para os quatro modos de áudio.
-function selectedQuality() { return QUALITY_PROFILES[$('qualitySelect').value] || QUALITY_PROFILES['1080p30']; }
+function selectedQuality() { return QUALITY_PROFILES[$('qualitySelect').value] || QUALITY_PROFILES['1440p60']; }
 function captureVideoConstraints(profile, surface) {
   return {
     width: { ideal: profile.width },
@@ -833,6 +1074,7 @@ async function startSharing() {
       toast('O navegador não enviou som. Na janela de seleção, marque “Compartilhar áudio”. Transmitindo só a imagem.', true);
     }
     desktopRoutedAudio = routed;
+    hwCodec = await detectHardwareCodec();
     await beginBroadcast(finalStream, sources, room);
     measureUplink().then(() => rebalanceBitrates());
     if (routed) startMixer();
@@ -867,11 +1109,13 @@ async function refreshStreamStats() {
   }
   const direction = isPresenter ? 'outbound-rtp' : 'inbound-rtp';
   const reports = await peer.getStats();
-  let videoReport = null;
+  let videoReport = null, sourceReport = null;
   reports.forEach((item) => {
     if (item.type === direction && (item.kind === 'video' || item.mediaType === 'video') && !item.isRemote) videoReport = item;
+    if (item.type === 'media-source' && item.kind === 'video') sourceReport = item;
   });
   if (!videoReport) return;
+  const codecReport = videoReport.codecId ? reports.get(videoReport.codecId) : null;
   const resolution = videoReport.frameWidth && videoReport.frameHeight
     ? `${videoReport.frameWidth} × ${videoReport.frameHeight}` : null;
   const counter = isPresenter ? videoReport.framesEncoded : videoReport.framesDecoded;
@@ -897,9 +1141,19 @@ async function refreshStreamStats() {
   if (resolution) parts.push(resolution);
   if (fps !== null) parts.push(`${Math.round(fps)} FPS`);
   if (mbps !== null) parts.push(`${mbps.toFixed(1)} Mb/s`);
-  $('qualityStats').textContent = parts.length > 1 ? parts.join(' · ') : 'Medindo qualidade real...';
-  const measured = [resolution || 'resolução indisponível', fps === null ? 'FPS indisponível' : `${Math.round(fps)} FPS`,
-    `${freezes} congelamentos`, `${dropped} quadros descartados`, `${lost} pacotes perdidos`];
+  // Transmissor: separa o FPS que a captura entrega do que o codificador consegue enviar, e diz o que está limitando.
+  const encoderInfo = [];
+  if (isPresenter) {
+    if (Number.isFinite(sourceReport?.framesPerSecond)) encoderInfo.push(`captura ${Math.round(sourceReport.framesPerSecond)} FPS`);
+    const limit = { cpu: 'limitado pela CPU', bandwidth: 'limitado pela rede', other: 'limitado' }[videoReport.qualityLimitationReason];
+    if (limit) encoderInfo.push(limit);
+    if (videoReport.powerEfficientEncoder !== undefined) encoderInfo.push(videoReport.powerEfficientEncoder ? 'codificador: placa de vídeo' : 'codificador: processador');
+  }
+  else if (videoReport.powerEfficientDecoder !== undefined) encoderInfo.push(videoReport.powerEfficientDecoder ? 'decodificador: placa de vídeo' : 'decodificador: processador');
+  $('qualityStats').textContent = parts.length > 1 ? [...parts, ...encoderInfo].join(' · ') : 'Medindo qualidade real...';
+  const measured = [codecReport?.mimeType ? codecReport.mimeType.replace('video/', '') : null, resolution || 'resolução indisponível', fps === null ? 'FPS indisponível' : `${Math.round(fps)} FPS`, ...encoderInfo,
+    videoReport.encoderImplementation ? `codificador ${videoReport.encoderImplementation}` : null, videoReport.decoderImplementation ? `decodificador ${videoReport.decoderImplementation}` : null, isPresenter ? `${peers.size} espectador(es)` : null,
+    `${freezes} congelamentos`, `${dropped} quadros descartados`, `${lost} pacotes perdidos`].filter(Boolean);
   diagnosticState.lastVideo = measured.join(' · ');
   if (newFreezes > 0) setNetworkHealth(`${newFreezes} novo(s) congelamento(s) detectado(s)`);
   else if (newLost > 4) setNetworkHealth(`${newLost} pacotes perdidos desde última medição`);
@@ -914,10 +1168,11 @@ $('loginForm').addEventListener('submit', async (event) => {
   button.disabled = true;
   try {
     const result = await api('/api/login', { method: 'POST', body: JSON.stringify({
-      email: $('email').value.trim(), password: $('password').value
+      email: $('email').value.trim(), password: $('password').value, remember: $('rememberMe').checked
     }) });
     $('password').value = '';
-    await afterLogin(result.email);
+    pref('email', $('rememberMe').checked ? result.email : null);
+    await afterLogin(result.email, result.nick, result.needsNick);
   } catch (e) {
     $('loginError').textContent = e.message;
     $('loginError').classList.remove('hidden');
@@ -959,6 +1214,41 @@ $('passwordForm').addEventListener('submit', async (event) => {
   finally { $('pwSubmit').disabled = false; }
 });
 
+// ---- alterar nick -------------------------------------------------------
+let nickRequired = false;
+function openNickModal(required = false) {
+  nickRequired = required === true;
+  $('nickTitle').textContent = nickRequired ? 'Escolha seu nick' : 'Alterar nick';
+  $('nickIntro').classList.toggle('hidden', !nickRequired);
+  $('nickCancel').classList.toggle('hidden', nickRequired);
+  $('nickError').classList.add('hidden');
+  $('nickInput').value = nickRequired ? '' : myNick;
+  $('nickModal').classList.remove('hidden');
+  $('nickInput').focus(); $('nickInput').select();
+}
+function closeNickModal(force = false) { if (nickRequired && !force) return; nickRequired = false; $('nickModal').classList.add('hidden'); }
+function nickFail(message) { $('nickError').textContent = message; $('nickError').classList.remove('hidden'); }
+$('changeNickBtn').addEventListener('click', () => openNickModal());
+$('accountBadge').addEventListener('click', () => { if (!nickRequired) openNickModal(); });
+$('nickCancel').addEventListener('click', () => closeNickModal());
+$('nickModal').addEventListener('click', (e) => { if (e.target === $('nickModal')) closeNickModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('nickModal').classList.contains('hidden')) closeNickModal(); });
+$('nickForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('nickError').classList.add('hidden');
+  const nick = $('nickInput').value.replace(/\s+/g, ' ').trim();
+  if (nick.length < 2 || nick.length > 24) return nickFail('O nick deve ter de 2 a 24 caracteres.');
+  $('nickSubmit').disabled = true;
+  try {
+    const result = await api('/api/nick', { method: 'POST', body: JSON.stringify({ nick }) });
+    setMyNick(result.nick);
+    const first = nickRequired;
+    closeNickModal(true);
+    toast(first ? `Tudo certo, ${result.nick}!` : 'Nick alterado.');
+  } catch (e) { nickFail(e.message); }
+  finally { $('nickSubmit').disabled = false; }
+});
+
 $('logoutBtn').addEventListener('click', async () => {
   try {
     if (currentRoom) {
@@ -969,8 +1259,9 @@ $('logoutBtn').addEventListener('click', async () => {
     await api('/api/logout', { method: 'POST' });
     socket?.disconnect();
     socket = null;
-    $('email').value = '';
+    $('email').value = pref('email') || '';
     $('password').value = '';
+    closeNickModal(true);
     showView('auth');
     toast('Você saiu da sua conta.');
   } catch (e) { toast(e.message, true); }
@@ -1009,7 +1300,7 @@ $('copyDiagnosticBtn').addEventListener('click', async () => {
 });
 $('enableAudioBtn').addEventListener('click', () => {
   const videos = [...videoTiles.entries()].filter(([id]) => id !== 'local').map(([, tile]) => tile.video);
-  Promise.allSettled(videos.map((video) => { video.muted = false; video.volume = 1; return video.play(); }))
+  Promise.allSettled(videos.map((video) => { video.muted = false; return video.play(); }))
     .then(() => toast('Áudio das transmissões ativado.'));
 });
 document.querySelectorAll('input[name="soundMode"]').forEach((c) => c.addEventListener('change', updateSoundOptions));
@@ -1023,6 +1314,26 @@ $('copyLinkBtn').addEventListener('click', async () => {
     toast('Link de convite copiado!');
   } catch { toast(`Copie o endereço: ${inviteUrl(currentRoom)}`); }
 });
+function applyWideRoom(on) {
+  document.body.classList.toggle('wide-room', on);
+  $('wideRoomBtn').setAttribute('aria-pressed', String(on));
+  $('wideRoomBtn').textContent = on ? '⇲' : '⇱';
+  pref('wideRoom', on ? '1' : null);
+}
+$('wideRoomBtn').addEventListener('click', () => applyWideRoom(!document.body.classList.contains('wide-room')));
+applyWideRoom(pref('wideRoom') === '1');
+$('thumbSize').addEventListener('input', (e) => {
+  $('videoGrid').style.setProperty('--thumb-w', `${e.target.value}px`);
+  pref('thumbSize', e.target.value);
+});
+$('thumbSize').value = pref('thumbSize') || '280';
+$('videoGrid').style.setProperty('--thumb-w', `${$('thumbSize').value}px`);
+$('email').value = pref('email') || '';
+$('roomSounds').checked = roomSoundsOn();
+$('roomSounds').addEventListener('change', (e) => {
+  pref('roomSounds', e.target.checked ? null : '0');
+  if (e.target.checked) playRoomSound('join'); // amostra ao religar
+});
 $('fullscreenBtn').addEventListener('click', async () => {
   try {
     if (!document.fullscreenElement) await ($('videoGrid').classList.contains('hidden') ? $('screenStage') : $('videoGrid')).requestFullscreen();
@@ -1033,7 +1344,7 @@ $('fullscreenBtn').addEventListener('click', async () => {
 (async () => {
   try {
     const response = await api('/api/me');
-    if (response.authenticated) await afterLogin(response.email);
+    if (response.authenticated) await afterLogin(response.email, response.nick, response.needsNick);
     else showView('auth');
   } catch (e) { showView('auth'); toast('Não foi possível conectar ao servidor.', true); }
 })();

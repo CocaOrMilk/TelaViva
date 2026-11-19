@@ -41,7 +41,8 @@ server {
     server_name exemplo.com;
     # ssl_certificate / ssl_certificate_key (ex.: Let's Encrypt)
 
-    location / {
+    # O TelaViva responde sob /telaviva/ (BASE_PATH em server.js), inclusive o Socket.IO (/telaviva/socket.io)
+    location /telaviva/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;

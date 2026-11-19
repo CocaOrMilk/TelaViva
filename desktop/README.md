@@ -1,6 +1,6 @@
 # TelaViva Desktop (protótipo 0.2)
 
-Cliente portable que abre o seu servidor TelaViva (endereço padrão `http://localhost:3000/`; altere em **TelaViva → Alterar endereço do servidor…** ou com a variável `TELAVIVA_URL`) e adiciona **áudio da transmissão sem o Discord**, com mixer
+Cliente portable que abre o seu servidor TelaViva (endereço padrão em `DEFAULT_URL`, `src/main.js`; para um servidor local use `http://localhost:3000/telaviva/`; altere em **TelaViva → Alterar endereço do servidor…** ou com a variável `TELAVIVA_URL`) e adiciona **áudio da transmissão sem o Discord**, com mixer
 por programa (volume que você ouve × volume enviado).
 
 - Linux: `TelaViva-*-linux-x86_64.AppImage` (precisa de `libfuse2t64`) ou `.tar.gz` (rodar `TelaViva.sh`).

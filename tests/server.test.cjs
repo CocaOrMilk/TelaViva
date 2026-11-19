@@ -32,7 +32,7 @@ test.before(async () => {
   const salt = crypto.randomBytes(16).toString('hex');
   fs.writeFileSync(path.join(dataDir, 'users.json'), JSON.stringify([{ id: 'u1', email: EMAIL, passwordHash: `${salt}:${crypto.scryptSync(PASSWORD, salt, 32).toString('hex')}` }]));
   const port = await freePort();
-  base = `http://127.0.0.1:${port}`;
+  base = `http://127.0.0.1:${port}/telaviva`; // o servidor responde sob /telaviva (BASE_PATH)
   server = spawn(process.execPath, ['server.js'], {
     cwd: path.join(__dirname, '..'),
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, NODE_ENV: 'development', SESSION_SECRET: crypto.randomBytes(32).toString('hex') },

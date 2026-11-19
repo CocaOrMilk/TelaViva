@@ -9,11 +9,18 @@ e, com o **app desktop**, áudio por programa **sem o som do Discord**.
 ## Recursos
 
 - **3 salas fixas** (sem criar/digitar código): até 8 pessoas e 3 transmissões simultâneas por sala.
-- Qualidade **720p30, 1080p30 e 1080p60**, com prioridade *fluidez* (reduz a resolução antes do FPS) ou *nitidez*.
+- Qualidade **720p30 a 1440p60 e 4K30** (padrão 1440p60), com prioridade *fluidez* (reduz a resolução antes do FPS) ou *nitidez*.
+- Codec **Automático**: usa o codificador da placa de vídeo (VP9 ou H.264) quando existe; senão VP8.
 - Divisão automática do **upload** entre os espectadores (mede o upload ao entrar na sala) e piso de bitrate, para a
   resolução não oscilar.
 - **Som**: sem som, com som do computador, ou **com som sem o Discord** (app desktop, Linux e Windows).
 - **Mixer** por programa (app desktop): volume que *você* ouve × volume enviado à transmissão, independentes.
+- **Nick** por conta (escolhido no primeiro acesso), lista de participantes com quem está transmitindo.
+- **Telas**: uma em destaque e as outras como miniaturas, modo amplo, **tamanho manual** (arraste o canto de cada tela)
+  e **ocultar** uma transmissão (para de baixar o vídeo e o som dela) ou a própria prévia. Pausa, volume e mudo de cada
+  tela são mantidos quando alguém entra, sai ou começa/para de transmitir.
+- **Sons** ao alguém entrar, sair ou começar a transmitir (podem ser desligados na sala).
+- "Manter conectado" (sessão de 30 dias, guardada em `data/sessions/`).
 - Trocar a própria senha na interface; **relatórios de erro** opcionais (ou automáticos no app desktop) gravados em `data/logs/`.
 
 ## Início rápido
@@ -24,7 +31,7 @@ Requisitos: **Node.js 20+** e um navegador recente (Chrome, Edge ou Firefox).
 npm install
 cp .env.example .env            # edite SESSION_SECRET (openssl rand -hex 32)
 npm run criar-usuario           # cadastra e-mail e senha (mínimo 10 caracteres)
-npm start                       # http://localhost:3000
+npm start                       # http://localhost:3000/telaviva/
 ```
 
 Cada pessoa precisa de uma conta (`npm run criar-usuario`). Para trocar uma senha pelo terminal: `npm run alterar-senha`

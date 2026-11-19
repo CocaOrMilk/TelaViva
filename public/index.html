@@ -6,13 +6,13 @@
   <meta name="theme-color" content="#0a1220">
   <meta name="description" content="Tela Viva — compartilhe sua tela ao vivo em uma sala privada com login.">
   <title>Tela Viva — Compartilhamento de tela</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/telaviva/styles.css">
 </head>
 <body>
   <div class="background-grid" aria-hidden="true"></div>
   <div class="site-shell">
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Tela Viva, página inicial">
+      <a class="brand" href="/telaviva/" aria-label="Tela Viva, página inicial">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 32 32" width="25" height="25" fill="none"><rect x="4" y="6" width="24" height="18" rx="4" stroke="currentColor" stroke-width="2.5"/><path d="m12 12 5 4-5 4v-8Z" fill="currentColor"/><path d="M12 28h8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
         </span>
@@ -21,6 +21,7 @@
       <div id="topPublic" class="top-right"><span class="online-dot"></span> Conexão privada</div>
       <div id="topPrivate" class="top-right hidden">
         <span id="accountBadge" class="account-badge"></span>
+        <button id="changeNickBtn" class="text-button" type="button">Alterar nick</button>
         <button id="changePasswordBtn" class="text-button" type="button">Alterar senha</button>
         <button id="logoutBtn" class="text-button" type="button">Sair <span aria-hidden="true">↗</span></button>
       </div>
@@ -53,6 +54,7 @@
               <input id="email" name="email" type="email" autocomplete="username" placeholder="voce@exemplo.com" maxlength="180" required>
               <label for="password">Senha</label>
               <div class="password-wrap"><input id="password" name="password" type="password" autocomplete="current-password" placeholder="Digite sua senha" required><button type="button" id="togglePassword" class="password-toggle" aria-label="Mostrar senha">Mostrar</button></div>
+              <label class="remember-me" for="rememberMe"><input id="rememberMe" name="remember" type="checkbox" checked> Manter conectado neste computador (30 dias)</label>
               <p id="loginError" class="form-error hidden" role="alert"></p>
               <button id="loginSubmit" class="primary-button full" type="submit">Entrar na plataforma <span aria-hidden="true">→</span></button>
             </form>
@@ -82,14 +84,17 @@
             </div>
             <div id="videoGrid" class="video-grid hidden" aria-label="Telas compartilhadas"></div>
             <p id="sharersCount" class="sharers-count">0 / 3 transmitindo</p>
-            <div class="stage-toolbar"><div class="toolbar-left"><span class="soft-dot"></span><span id="stageCaption">Sala pronta para compartilhar</span></div><div class="toolbar-right"><span id="qualityStats" class="quality-stats" aria-live="polite">Qualidade real: aguardando vídeo</span><button id="fullscreenBtn" type="button" class="icon-button" title="Tela cheia" aria-label="Exibir em tela cheia">⛶</button></div></div>
+            <div class="stage-toolbar"><div class="toolbar-left"><span class="soft-dot"></span><span id="stageCaption">Sala pronta para compartilhar</span></div><div class="toolbar-right"><span id="qualityStats" class="quality-stats" aria-live="polite">Qualidade real: aguardando vídeo</span><label id="thumbSizeWrap" class="thumb-size hidden" for="thumbSize">Miniaturas <input type="range" id="thumbSize" min="160" max="560" step="10" value="280" aria-label="Tamanho das miniaturas"></label><button id="wideRoomBtn" type="button" class="icon-button" title="Modo amplo: esconde a lateral e usa a largura toda da janela" aria-label="Modo amplo" aria-pressed="false">⇱</button><button id="fullscreenBtn" type="button" class="icon-button" title="Tela cheia" aria-label="Exibir em tela cheia">⛶</button></div></div>
             <div id="shareSetup" class="share-setup">
               <div class="setup-block">
                 <label class="setup-label" for="qualitySelect">Qualidade</label>
                 <select id="qualitySelect" class="audio-select">
                   <option value="720p30">HD — 720p / 30 FPS</option>
-                  <option value="1080p30" selected>Full HD — 1080p / 30 FPS</option>
+                  <option value="1080p30">Full HD — 1080p / 30 FPS</option>
                   <option value="1080p60">Full HD — 1080p / 60 FPS</option>
+                  <option value="1440p30">QHD — 1440p / 30 FPS</option>
+                  <option value="1440p60" selected>QHD — 1440p / 60 FPS</option>
+                  <option value="2160p30">4K — 2160p / 30 FPS</option>
                 </select>
               </div>
               <div class="setup-block">
@@ -123,7 +128,7 @@
               <summary>Detalhes técnicos</summary>
               <label class="sharp-toggle" for="preferSharp"><input type="checkbox" id="preferSharp"> Priorizar nitidez (texto e slides) em vez de fluidez. Vale para a próxima transmissão.</label>
               <label class="sharp-toggle" for="codecSelect">Codec de vídeo (avançado):
-                <select id="codecSelect"><option value="auto" selected>Automático (recomendado)</option><option value="h264">H.264</option><option value="vp9">VP9</option></select>
+                <select id="codecSelect"><option value="auto" selected>Automático (placa de vídeo se houver)</option><option value="vp8">VP8 (processador)</option><option value="h264">H.264</option><option value="vp9">VP9</option></select>
               </label>
               <p id="uplinkInfo" class="setup-note">Upload estimado: medindo…</p>
               <div class="stream-health" id="streamHealth" role="status">
@@ -136,7 +141,7 @@
           </div>
           <aside class="room-sidebar">
             <div class="side-card"><div class="side-header"><h3>Esta sala</h3><span class="pill-mini">Privado</span></div><p>Mande o link para a pessoa entrar direto nesta sala.</p><div class="room-code-display" id="roomCodeDisplay">—</div><button id="copyLinkBtn" class="copy-button" type="button"><span aria-hidden="true">▢</span> Copiar link de convite</button></div>
-            <div class="side-card"><div class="side-header"><h3>Participantes</h3><span id="membersCount" class="participants-count">1 / 8</span></div><div class="participant-line"><span class="participant-avatar">EU</span><div><strong>Você</strong><small id="youStatus">Conectado à sala</small></div><span class="online-dot push-right"></span></div><div id="othersRow" class="participant-line hidden"><span class="participant-avatar other">+ </span><div><strong id="othersCount">Outros participantes</strong><small>Assistindo ou transmitindo</small></div></div></div>
+            <div class="side-card"><div class="side-header"><h3>Participantes</h3><span id="membersCount" class="participants-count">1 / 8</span></div><div class="participant-line"><span id="youAvatar" class="participant-avatar">EU</span><div class="participant-text"><strong id="youName">Você</strong><small id="youStatus">Conectado à sala</small></div><span class="online-dot push-right"></span></div><div id="othersList"></div><label class="sharp-toggle room-sounds-toggle" for="roomSounds"><input type="checkbox" id="roomSounds" checked> Sons ao entrar, sair e começar a transmitir</label></div>
             <div class="tip-card"><div class="tip-symbol">✦</div><strong>Dica de privacidade</strong><p>Antes de compartilhar, feche abas ou janelas com senhas e informações pessoais.</p></div>
           </aside>
         </div>
@@ -161,13 +166,26 @@
       </div>
     </form>
   </div>
+  <div id="nickModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="nickTitle">
+    <form id="nickForm" class="modal-card" autocomplete="off">
+      <h2 id="nickTitle">Alterar nick</h2>
+      <p id="nickIntro" class="modal-intro hidden">Bem-vindo! Escolha o nome que vai aparecer para os outros na lista de participantes. Dá para mudar depois em "Alterar nick".</p>
+      <label for="nickInput">Nick <small>(nome que aparece para os outros na sala, 2 a 24 caracteres)</small></label>
+      <input id="nickInput" type="text" minlength="2" maxlength="24" required>
+      <p id="nickError" class="form-error hidden" role="alert"></p>
+      <div class="modal-actions">
+        <button id="nickSubmit" class="primary-button" type="submit">Salvar nick</button>
+        <button id="nickCancel" class="secondary-button" type="button">Cancelar</button>
+      </div>
+    </form>
+  </div>
   <div id="reportBar" class="report-bar hidden" role="alert">
     <span>Algo deu errado. Quer enviar um relatório técnico para o administrador?</span>
     <button id="reportSendBtn" type="button" class="report-send">Enviar relatório</button>
     <button id="reportDismissBtn" type="button" class="report-dismiss">Agora não</button>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="/app.js" defer></script>
+  <script src="/telaviva/socket.io/socket.io.js"></script>
+  <script src="/telaviva/app.js" defer></script>
 </body>
 </html>

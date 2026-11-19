@@ -73,7 +73,20 @@
 .video-grid.hidden{display:none}.video-tile{border:1px solid #354b60;background:#111c2b;border-radius:15px;overflow:hidden;min-width:0}
 .video-tile-title{padding:10px 13px;font-weight:700;font-size:12px;color:#b8e8e0}
 .video-tile video{width:100%;aspect-ratio:16/9;object-fit:contain;background:#03060a;display:block}
-.tile-fullscreen{color:#aedbcf;background:transparent;border:0;padding:10px 13px;cursor:pointer;font-size:12px}
+.video-tile-title{display:flex;align-items:center;gap:6px}.video-tile-title>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile-action{color:#aedbcf;background:transparent;border:0;padding:2px 6px;cursor:pointer;font-size:12px;white-space:nowrap}.tile-action:hover{color:#fff}
+.video-tile.featured .tile-focus{display:none}
+/* destaque: uma tela grande, as outras como miniaturas numa coluna de largura ajustável */
+.video-grid.has-focus{grid-template-columns:minmax(0,1fr) var(--thumb-w,280px);align-items:start}
+.video-grid.has-focus .video-tile.featured{grid-column:1;grid-row:1/span 3}
+.video-grid.has-focus .video-tile:not(.featured){grid-column:2}
+.video-tile.featured video{max-height:calc(100vh - 150px)}
+.thumb-size{display:inline-flex;align-items:center;gap:7px;color:#93a7ba;font-size:11px}.thumb-size input{width:110px;accent-color:var(--teal)}
+body.wide-room:has(#roomView:not(.hidden)) .site-shell{max-width:none;padding:0 24px}
+body.wide-room .room-grid{grid-template-columns:minmax(0,1fr)}
+body.wide-room .room-sidebar{display:none}
+.remember-me{display:flex;align-items:center;gap:8px;font-weight:600!important;color:#b6c7d7!important;cursor:pointer}.remember-me input{accent-color:var(--teal);width:16px;height:16px}
+@media(max-width:780px){.video-grid.has-focus{grid-template-columns:1fr}.video-grid.has-focus .video-tile.featured,.video-grid.has-focus .video-tile:not(.featured){grid-column:auto;grid-row:auto}.thumb-size{display:none}}
 .sharers-count{font-size:12px;color:#85b3ae;margin:8px 0}
 
 /* v1.6 — escolhas: monitor, janela ou aba */
@@ -157,3 +170,28 @@
 .modal-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}.modal-actions .primary-button{flex:1;gap:8px}
 
 .sharp-toggle select{background:#0d1b2a;color:#e9f6fa;border:1px solid #456173;border-radius:8px;padding:4px 8px;font:inherit;font-size:12px}
+
+/* nicks na lista de participantes */
+#othersList{display:flex;flex-direction:column}
+.participant-text{min-width:0;flex:1}
+.participant-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.participant-avatar{flex-shrink:0}
+.live-dot{width:8px;height:8px;flex-shrink:0;border-radius:50%;background:#ff776d;box-shadow:0 0 0 4px #ff776d22}
+.account-badge{cursor:pointer}
+.modal-intro{margin:0 0 4px;color:#a9bccb;font-size:13px;line-height:1.6}
+.room-sounds-toggle{margin-top:18px;padding-top:14px;border-top:1px solid #2a3b4d;font-size:11px}
+/* telas: tamanho manual e ocultar (2026-11-19) */
+.video-tile{position:relative;padding-bottom:12px}
+.video-grid.has-focus{grid-template-columns:minmax(0,1fr) max-content}
+.video-grid.has-focus .video-tile:not(.featured):not(.resized){width:var(--thumb-w,280px)}
+.video-tile.resized{display:flex;flex-direction:column;justify-self:start;max-width:100%}
+.video-tile.resized video{flex:1 1 auto;min-height:0;height:auto;aspect-ratio:auto;max-height:none}
+.video-tile.resizing{outline:2px solid #6ce0bf;user-select:none}
+.tile-resize{position:absolute;right:2px;bottom:0;width:18px;height:14px;cursor:nwse-resize;touch-action:none;opacity:.55;z-index:2;background:linear-gradient(135deg,transparent 0 45%,#aedbcf 45% 52%,transparent 52% 64%,#aedbcf 64% 71%,transparent 71% 83%,#aedbcf 83% 90%,transparent 90%)}
+.tile-resize:hover,.video-tile.resizing .tile-resize{opacity:1}
+.tile-reset-size{display:none}
+.video-tile.resized .tile-reset-size{display:inline}
+.video-tile.hidden-tile{padding-bottom:0;border-style:dashed;background:#0f1824}
+.hidden-note{margin:0;padding:0 13px 12px;font-size:11px;color:#7f98ae;line-height:1.6}
+@media(max-width:780px){.video-grid.has-focus .video-tile:not(.featured):not(.resized){width:auto}}
+.video-grid.has-focus .video-tile:not(.featured):not(.resized):not(.hidden-tile) .tile-action .lbl{display:none}.video-grid.has-focus .video-tile:not(.featured) .tile-action{font-size:14px;padding:2px 5px}
