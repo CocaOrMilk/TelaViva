@@ -6,7 +6,7 @@ const path = require('node:path');
 const { createReporter } = require('./reporter');
 
 // Endereço do servidor TelaViva. Troque em TelaViva → "Alterar endereço do servidor…" ou com TELAVIVA_URL.
-const DEFAULT_URL = 'http://localhost:3000/';
+const DEFAULT_URL = 'https://planosprontos.com.br/telaviva/';
 const isLinux = process.platform === 'linux';
 const isWin = process.platform === 'win32';
 
@@ -123,7 +123,11 @@ ipcMain.on('capture:surface', (event, surface) => {
   if (mainWindow && event.sender === mainWindow.webContents) requestedSurface = ['monitor', 'window', 'browser'].includes(surface) ? surface : null;
 });
 function setupDisplayMedia() {
-  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, rawCallback) => {
+    // O callback do Electron só pode ser chamado uma vez; se ele lançar (ex.: "Invalid capture constraints"),
+    // o catch abaixo não pode chamá-lo de novo.
+    let answered = false;
+    const callback = (streams) => { if (answered) return; answered = true; rawCallback(streams); };
     try {
       const types = requestedSurface === 'monitor' ? ['screen'] : requestedSurface === 'window' ? ['window'] : ['screen', 'window'];
       requestedSurface = null;
@@ -132,10 +136,19 @@ function setupDisplayMedia() {
       // No Wayland o portal do sistema já fez a escolha e devolve uma única fonte.
       const chosen = sources.length === 1 ? sources[0] : await pickSource(mainWindow, sources);
       if (!chosen) return callback({});
-      callback(process.platform === 'win32' && request.audioRequested ? { video: chosen, audio: 'loopback' } : { video: chosen });
+      const withAudio = process.platform === 'win32' && request.audioRequested;
+      try {
+        answered = true;
+        rawCallback(withAudio ? { video: chosen, audio: 'loopback' } : { video: chosen });
+      } catch (e) {
+        // Se o áudio loopback for recusado, tenta só o vídeo em vez de falhar a captura inteira.
+        console.error('captura com áudio falhou, tentando só vídeo:', e);
+        if (!withAudio) throw e;
+        rawCallback({ video: chosen });
+      }
     } catch (e) {
       console.error('captura de tela falhou:', e);
-      callback({});
+      try { callback({}); } catch (err) { console.error('callback de captura já respondido:', err.message); }
     }
   });
 }
